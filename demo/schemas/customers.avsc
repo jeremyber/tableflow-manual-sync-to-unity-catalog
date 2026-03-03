@@ -1,0 +1,12 @@
+{
+  "type": "record",
+  "name": "Customer",
+  "namespace": "com.example.tableflow",
+  "fields": [
+    {"name": "customer_id", "type": "string"},
+    {"name": "name", "type": "string"},
+    {"name": "email", "type": "string"},
+    {"name": "city", "type": "string"},
+    {"name": "created_at", "type": {"type": "long", "logicalType": "timestamp-millis"}}
+  ]
+}
