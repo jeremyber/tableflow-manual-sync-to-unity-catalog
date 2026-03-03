@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "catalog-sync"
+version = "0.1.0"
+description = "Sync Tableflow Iceberg catalog metadata into Databricks Unity Catalog over private networks"
+requires-python = ">=3.11"
+dependencies = [
+    "pyiceberg>=0.7.0",
+    "databricks-sdk>=0.30.0",
+    "boto3>=1.34.0",
+    "pydantic>=2.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-mock>=3.14.0",
+    "moto[glue,s3]>=5.0.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
