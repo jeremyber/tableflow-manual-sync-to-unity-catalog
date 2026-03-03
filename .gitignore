@@ -5,3 +5,7 @@ __pycache__/
 dist/
 build/
 .build/
+.terraform/
+*.tfstate
+*.tfstate.backup
+.terraform.lock.hcl
