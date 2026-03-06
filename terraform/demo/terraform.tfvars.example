@@ -1,0 +1,9 @@
+# Databricks — workspace URL and personal access token
+databricks_workspace_url = "https://xxx.cloud.databricks.com"
+databricks_token         = "dapi..."
+
+# Optional overrides
+# project_name    = "tableflow-catalog-sync"
+# aws_region      = "us-east-1"
+# enable_schedule = true
+# sync_schedule   = "rate(15 minutes)"

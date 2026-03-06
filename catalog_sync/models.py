@@ -16,6 +16,7 @@ class TableInfo:
     name: str
     location: str
     columns: list[ColumnInfo] = field(default_factory=list)
+    table_format: str = "DELTA"
 
     @property
     def full_name(self) -> str:

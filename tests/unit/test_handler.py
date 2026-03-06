@@ -5,13 +5,15 @@ from catalog_sync.config import SyncConfig, SourceType
 
 def _config(**overrides):
     defaults = dict(
-        source_type=SourceType.GLUE,
+        source_type=SourceType.CONFLUENT_API,
         databricks_host="https://ws.databricks.com",
         databricks_token="dapi123",
         target_catalog="tf_catalog",
         target_schema="default",
-        glue_database="tableflow_db",
-        glue_region="us-east-1",
+        confluent_api_key="key",
+        confluent_api_secret="secret",
+        confluent_cluster_id="lkc-abc",
+        confluent_environment_id="env-xyz",
     )
     defaults.update(overrides)
     return SyncConfig(**defaults)
@@ -34,30 +36,17 @@ def test_lambda_handler_runs_sync(mock_engine_cls, mock_build_target, mock_build
     assert "added" in result["body"]
 
 
-def test_build_source_glue():
-    config = _config(source_type=SourceType.GLUE, glue_database="my_db", glue_region="us-west-2")
-    with patch("catalog_sync.handler.GlueSource") as mock_cls:
+def test_build_source_confluent_api():
+    config = _config()
+    with patch("catalog_sync.handler.ConfluentCloudSource") as mock_cls:
         build_source(config)
-        mock_cls.assert_called_once_with(database="my_db", region="us-west-2")
-
-
-def test_build_source_s3_discovery():
-    config = _config(source_type=SourceType.S3_DISCOVERY, s3_bucket="mybucket", s3_prefix="warehouse/")
-    with patch("catalog_sync.handler.S3DiscoverySource") as mock_cls:
-        build_source(config)
-        mock_cls.assert_called_once_with(bucket="mybucket", prefix="warehouse/")
-
-
-def test_build_source_iceberg_rest():
-    config = _config(
-        source_type=SourceType.ICEBERG_REST,
-        iceberg_rest_uri="https://cat",
-        iceberg_rest_credential="k:s",
-        iceberg_rest_warehouse="s3://b",
-    )
-    with patch("catalog_sync.handler.IcebergRestSource") as mock_cls:
-        build_source(config)
-        mock_cls.assert_called_once_with(uri="https://cat", credential="k:s", warehouse="s3://b")
+        mock_cls.assert_called_once_with(
+            api_key="key",
+            api_secret="secret",
+            cluster_id="lkc-abc",
+            environment_id="env-xyz",
+            namespace="default",
+        )
 
 
 def test_build_target():
@@ -68,4 +57,6 @@ def test_build_target():
             host="https://ws.databricks.com",
             token="dapi123",
             catalog_name="tf_catalog",
+            warehouse_id=None,
+            schema_name="default",
         )

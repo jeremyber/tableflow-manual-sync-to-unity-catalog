@@ -1,0 +1,13 @@
+# Confluent Cloud — org-level Cloud API key
+# Create at https://confluent.cloud/settings/api-keys (Cloud resource management)
+confluent_cloud_api_key    = ""
+confluent_cloud_api_secret = ""
+
+# AWS
+aws_region   = "us-east-1"
+project_name = "tableflow-catalog-sync"
+
+# Databricks
+databricks_host       = "https://dbc-xxxxx.cloud.databricks.com"
+databricks_token      = "dapiXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+databricks_account_id = ""

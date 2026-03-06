@@ -18,8 +18,8 @@ pip install \
   --only-binary=:all: \
   --implementation cp \
   --python-version 3.11 \
-  pyiceberg databricks-sdk boto3 pydantic 2>/dev/null || \
-pip install --target "$BUILD_DIR" pyiceberg databricks-sdk boto3 pydantic
+  databricks-sdk requests 2>/dev/null || \
+pip install --target "$BUILD_DIR" databricks-sdk requests
 
 echo "==> Copying source code"
 cp -r "$PROJECT_ROOT/catalog_sync" "$BUILD_DIR/"

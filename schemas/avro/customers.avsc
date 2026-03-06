@@ -1,0 +1,14 @@
+{
+  "type": "record",
+  "name": "Customer",
+  "namespace": "io.confluent.tableflow.demo",
+  "fields": [
+    {"name": "customer_id", "type": "string"},
+    {"name": "first_name", "type": "string"},
+    {"name": "last_name", "type": "string"},
+    {"name": "email", "type": "string"},
+    {"name": "phone", "type": ["null", "string"], "default": null},
+    {"name": "region", "type": "string"},
+    {"name": "created_at", "type": {"type": "long", "logicalType": "timestamp-millis"}}
+  ]
+}

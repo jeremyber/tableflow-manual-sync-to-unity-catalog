@@ -9,3 +9,8 @@ build/
 *.tfstate
 *.tfstate.backup
 .terraform.lock.hcl
+terraform.tfvars
+*.pem
+.env*
+.claude/
+*.code-workspace

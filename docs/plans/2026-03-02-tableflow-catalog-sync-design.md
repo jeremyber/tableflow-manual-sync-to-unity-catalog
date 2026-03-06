@@ -5,11 +5,17 @@
 
 ## Problem
 
-Confluent Cloud Tableflow can natively integrate with Databricks Unity Catalog, but this integration cannot traverse private network boundaries (PrivateLink/Private Endpoints). This limitation applies across AWS, Azure, and GCP.
+Customers running Confluent Cloud dedicated clusters with private networking (PrivateLink/Private Endpoints) have effectively chosen to avoid public network paths for accessing their data infrastructure. Tableflow materializes Kafka topics as Delta Lake tables into customer-owned storage (BYOB), but two gaps prevent these tables from appearing in external catalogs like Databricks Unity Catalog:
+
+1. **No Iceberg REST Catalog over private networking.** Confluent's built-in IRC — the catalog query engines would normally use to discover Tableflow tables — has no inbound PrivateLink support (INIT-6185 tracks adding it).
+
+2. **Native catalog sync can't traverse private catalog endpoints.** Tableflow's built-in integrations (Unity Catalog, Snowflake Open Catalog, Polaris) require egress connectivity from Confluent's side to the customer's catalog. When that catalog is exposed only via PrivateLink / Private Endpoints, there's currently no supported private egress path from Confluent to it (INIT-9047).
+
+The data is in the customer's own S3 bucket, accessible within their VPC — but there's no private-network-compatible catalog path to register it. This limitation applies across AWS, Azure, and GCP.
 
 ## Solution
 
-A lightweight Python-based catalog sync engine that runs inside the customer's private network (VPC/VNet), reads Tableflow's Iceberg catalog metadata, and registers those tables as external Iceberg tables in Databricks Unity Catalog. Deployed as a serverless function (AWS Lambda / Azure Functions) on a configurable schedule.
+A lightweight Python-based catalog sync engine that discovers Tableflow-enabled topics via the Confluent Cloud control-plane API (public, metadata-only — topic names and storage paths) and registers them as external tables in Databricks Unity Catalog. The data plane stays private — no customer data leaves the VPC. Runs from any compute (laptop, Lambda, Azure Functions) on a configurable schedule.
 
 ## Architecture
 
@@ -45,8 +51,8 @@ A lightweight Python-based catalog sync engine that runs inside the customer's p
 1. **External Iceberg tables, not foreign catalogs.** Unity Catalog's "foreign catalog" is for RDBMS (JDBC) sources. For Iceberg on S3, we register external tables using `CREATE TABLE ... USING iceberg LOCATION 's3://...'`.
 
 2. **Pluggable source catalog.** Three source strategies, ordered by current private-networking viability:
-   - **AWS Glue** (primary for demo) — Tableflow supports Glue as external catalog; Glue APIs work over VPC endpoints
-   - **S3 metadata.json discovery** (universal fallback) — scans BYOB bucket for Iceberg metadata files directly
+   - **S3 metadata.json discovery** (primary) — scans BYOB bucket for Iceberg metadata files directly via S3 Gateway VPC Endpoint
+   - **AWS Glue** (fallback) — Tableflow supports Glue as external catalog; Glue APIs work over VPC endpoints
    - **Iceberg REST Catalog** (future) — Confluent's IRC is NOT available over private networking today (INIT-6185 in progress); kept as a source for when that ships
 
 3. **Cloud-agnostic core.** The sync engine is pure Python with no cloud-specific dependencies. Cloud deployment handled by per-CSP Terraform modules.
@@ -159,11 +165,12 @@ catalog_sync/
 Per Confluent internal and public docs:
 
 1. **CMS (Confluent-Managed Storage) does NOT work with private networking** — BYOB only for private clusters.
-2. **Iceberg REST Catalog is NOT available over private networking** — no inbound PN support; INIT-6185 is the roadmap item to add it.
-3. **External catalog sync (Unity, Snowflake OC, Polaris) over PN not yet GA** — egress PrivateLink is being addressed by INIT-9047.
-4. **BYOB + S3 Gateway VPC Endpoints works today** — this is the supported private-networking path for Tableflow storage.
+2. **Iceberg REST Catalog is NOT available over private networking** — no inbound PrivateLink support; INIT-6185 is the roadmap item to add it. This means query engines cannot discover Tableflow tables via the IRC from within a private VPC/VNet.
+3. **Native catalog sync can't traverse private catalog endpoints** — Tableflow's built-in integrations (Unity, Snowflake OC, Polaris) require egress connectivity from Confluent to the customer's catalog; when that catalog is only reachable via PrivateLink / Private Endpoints, there's no supported private egress path. INIT-9047 tracks this.
+4. **BYOB + S3 Gateway VPC Endpoints works today** — the data is accessible within the VPC, but there's no catalog path to discover it.
+5. **Confluent Cloud control-plane API (`api.confluent.cloud`) is public-only** — no PrivateLink option. All Confluent Cloud customers already use this for console access, CLI, connector management, etc. The metadata it returns (topic names, storage paths) is not customer data.
 
-This means our demo must use BYOB storage with either Glue as the external catalog or direct S3 metadata scanning.
+The net effect: the data plane is secure (data stays in the customer's VPC via BYOB + VPC endpoints), but there's a catalog gap. This tool fills it by using the public control-plane API for metadata discovery and registering tables in Unity Catalog.
 
 ## Open Questions
 
