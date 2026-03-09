@@ -6,8 +6,10 @@ Discovers Confluent Cloud Tableflow-enabled topics and registers them
 as external tables in Databricks Unity Catalog.
 
 Usage:
-    set -a && source .env.sync && set +a
     python sync.py
+
+    Automatically loads .env.sync from the same directory if present.
+    You can also export env vars manually or use: set -a && source .env.sync && set +a
 
 Environment variables:
     CONFLUENT_API_KEY        - Tableflow API key
@@ -22,9 +24,27 @@ Environment variables:
 """
 
 import os
+from pathlib import Path
 import requests
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.service.sql import Disposition, Format
+
+# ── Load .env.sync if present ────────────────────────────────
+# Looks for .env.sync next to this script so you can just run
+# `python sync.py` without manually exporting env vars.
+
+_env_file = Path(__file__).resolve().parent / ".env.sync"
+if _env_file.is_file():
+    with open(_env_file) as _f:
+        for _line in _f:
+            _line = _line.strip()
+            if not _line or _line.startswith("#"):
+                continue
+            if "=" in _line:
+                _key, _, _val = _line.partition("=")
+                _key = _key.strip()
+                _val = _val.strip().strip('"').strip("'")
+                os.environ.setdefault(_key, _val)
 
 # ── Config ──────────────────────────────────────────────────
 
@@ -68,6 +88,16 @@ while url:
             continue
 
         name = spec.get("display_name", "")
+
+        # Only register tables that Tableflow has fully materialized.
+        # Without this check, CREATE TABLE ... USING DELTA LOCATION on
+        # an empty path causes Databricks to write its own _delta_log,
+        # which Tableflow then rejects ("Delta table modified externally").
+        phase = topic.get("status", {}).get("phase", "")
+        if phase != "RUNNING":
+            print(f"  Skipping '{name}' — Tableflow phase is '{phase}', not RUNNING")
+            continue
+
         formats = spec.get("table_formats", ["DELTA"])
         fmt = "DELTA" if "DELTA" in formats else formats[0].upper()
 

@@ -38,3 +38,10 @@ variable "databricks_account_id" {
   description = "Databricks account ID (for IAM trust policy)"
   type        = string
 }
+
+# PNI (Private Network Interface) networking
+variable "num_eni_per_subnet" {
+  description = "Number of ENIs to create per subnet for PNI (minimum 17 per Confluent docs)"
+  type        = number
+  default     = 17
+}

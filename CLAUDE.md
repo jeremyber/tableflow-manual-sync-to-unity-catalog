@@ -4,30 +4,30 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Catalog sync engine for customers running Confluent Cloud dedicated clusters with private networking (PrivateLink / Private Endpoints). Tableflow materializes Kafka topics as Delta Lake tables into customer-owned storage (BYOB), but there's no private-network-compatible catalog path to register them in Unity Catalog:
+Catalog sync engine for customers running Confluent Cloud clusters with private networking (enterprise with PNI, or dedicated with PrivateLink). Tableflow materializes Kafka topics as Delta Lake tables into customer-owned storage (BYOB), but there's no private-network-compatible catalog path to register them in Unity Catalog:
 
-1. **Confluent's Iceberg REST Catalog is not available over PrivateLink** — no inbound private networking support today
-2. **Native catalog sync can't traverse private catalog endpoints** — Tableflow's built-in integrations (Unity Catalog, Polaris, etc.) require egress connectivity from Confluent's side to the customer's catalog, and there's currently no supported private egress path when the catalog is behind PrivateLink
+1. **Confluent's Iceberg REST Catalog is not available over private networking** — no inbound private networking support today
+2. **Native catalog sync can't traverse private catalog endpoints** — Tableflow's built-in integrations (Unity Catalog, Polaris, etc.) require egress connectivity from Confluent's side to the customer's catalog, and there's currently no supported private egress path when the catalog is behind private networking
 
 This tool bridges the gap: it discovers Tableflow-enabled topics via the Confluent Cloud control-plane API (metadata only — topic names and storage paths) and registers them as external tables in Databricks Unity Catalog. The data plane stays private — no customer data leaves the VPC.
 
 ## Prerequisites
 
 Customers must already have:
-- A Confluent Cloud dedicated cluster with PrivateLink and Tableflow-enabled topics (BYOB)
+- A Confluent Cloud enterprise (PNI) or dedicated (PrivateLink) cluster with Tableflow-enabled topics (BYOB)
 - A Databricks workspace with Unity Catalog
 - A Databricks SQL warehouse for executing statements
 
 ## Architecture
 
-- **sync.py**: Self-contained entry point — runs from laptop, reads Confluent Cloud API for topic discovery, registers tables in Databricks. No imports from catalog_sync modules (except databricks SDK and requests).
+- **sync.py**: Self-contained entry point — runs from laptop, auto-loads `.env.sync` from project root, reads Confluent Cloud API for topic discovery, registers tables in Databricks. No imports from catalog_sync modules (except databricks SDK and requests).
 - **catalog_sync/**: Modular Python engine (used by Lambda handler)
   - `sources/confluent_cloud.py`: Discovers Tableflow-enabled topics via REST API
   - `targets/unity_catalog.py`: Registers external tables in Databricks via SDK SQL execution
   - `engine.py`: Diff-based sync orchestration (add/update/remove tables)
   - `handler.py`: Builds source + target, runs engine (Lambda entry point)
   - `config.py`: Environment-variable-driven configuration
-- **terraform/confluent-cloud/**: Provisions all infrastructure (CC cluster, VPC, PrivateLink, BYOB, bastion, Databricks resources)
+- **terraform/confluent-cloud/**: Provisions all infrastructure (CC enterprise cluster, VPC, PNI ENIs, BYOB, bastion with NGINX proxy, Databricks resources)
 - **terraform/demo/**: Optional Lambda + EventBridge deployment
 - **scripts/**: Topic setup (`setup-topics.sh`), cleanup (`cleanup-topics.sh`), live demo (`add-topic.sh`), Lambda packaging (`build_lambda.sh`)
 
@@ -44,15 +44,15 @@ Customers must already have:
 | `sync.py` | Laptop (or any compute) | Uses Confluent Cloud public API + Databricks HTTPS |
 | `setup-topics.sh` | Laptop | Uses Confluent Cloud public API (Connect, Tableflow) |
 | `add-topic.sh` | Laptop | Uses Confluent Cloud public API |
-| `cleanup-topics.sh` | Laptop (partial) + Bastion (topics) | Steps 1-3 use public API; topic deletion uses Kafka protocol (9092) via PrivateLink |
+| `cleanup-topics.sh` | Laptop (partial) + Bastion (topics) | Steps 1-3 use public API; topic deletion uses Kafka protocol (9092) via PNI |
 
 ## Bastion Host
 
 - Sits in **public subnet** (SSH access via `bastion-key.pem`)
-- Used for Kafka data-plane operations over PrivateLink: topic deletion (`delete-topics.py`), producing/consuming via bootstrap server (port 9092)
-- Reaches Kafka endpoints via PrivateLink DNS (Route53 private zone)
+- Runs **NGINX stream proxy** that forwards Kafka (9092) and HTTPS (443) traffic through PNI ENIs
+- PNI does not provide private DNS — the NGINX proxy uses SNI passthrough to route traffic
+- Kafka clients on the bastion connect to `localhost:9092` (NGINX proxies to Confluent endpoints)
 - No NAT gateway needed (bastion has internet via IGW in public subnet)
-- Note: The Kafka REST API (port 443) is NOT served over PrivateLink — only the Kafka protocol (port 9092) is available
 - To delete topics: SCP `cleanup-topics.sh` + `delete-topics.py` + `.env.topics` to bastion, SSH in, run script
 
 ## Commands
@@ -62,8 +62,7 @@ Customers must already have:
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 
-# Run sync
-set -a && source .env.sync && set +a
+# Run sync (auto-loads .env.sync from project root)
 python sync.py
 
 # Tests (must run from project root)
@@ -88,20 +87,20 @@ cd terraform/confluent-cloud && terraform init && terraform validate
 
 ## Confluent Cloud API Details
 
-- `api.confluent.cloud` is **public-only** — no PrivateLink option exists
+- `api.confluent.cloud` is **public-only** — no private networking option exists
 - Tableflow API: `GET /tableflow/v1/tableflow-topics?spec.kafka_cluster={id}&environment={env_id}`
 - Connect API: `POST /connect/v1/environments/{env}/clusters/{cluster}/connectors`
-- Kafka REST endpoint (per-cluster, e.g. `lkc-xxx.region.aws.glb.confluent.cloud:443`): NOT served over PrivateLink. Only the Kafka protocol (port 9092) works over PrivateLink. There is no public API at `api.confluent.cloud` for topic CRUD either — topic deletion requires the console, CLI, or Kafka protocol access
+- Topic deletion requires the console, CLI, or Kafka protocol access — use the bastion's NGINX proxy (`localhost:9092`)
 - Auth: HTTP Basic with API key/secret for all endpoints
 
 ## Common Errors
 
 - **LOCATION_OVERLAP**: Old tables in a different schema point to same S3 path. Drop stale tables first.
-- **Tableflow "Delta table modified externally"**: Databricks wrote to `_delta_log/` (happens if sync runs before Tableflow materializes). Fix: delete `_delta_log/` in S3, re-enable Tableflow. Always wait 2-3 min after enabling Tableflow.
+- **Tableflow "Delta table modified externally"**: Databricks wrote to `_delta_log/` (happens if sync runs before Tableflow materializes). Now mitigated by two safeguards: (1) sync.py checks `status.phase == "RUNNING"` before registering, (2) Databricks external location is read-only. If it still happens: delete `_delta_log/` in S3, re-enable Tableflow.
 - **Dual format publishing fails**: Use `["DELTA"]` only, not `["DELTA", "ICEBERG"]`
 - **`pip install -e .` "Multiple top-level packages"**: Need `[tool.setuptools.packages.find] include = ["catalog_sync*"]` in pyproject.toml
 - **`declare -A` fails with `set -u`**: Use `key:value` string parsing instead of bash associative arrays
-- **Kafka REST API not available over PrivateLink**: Port 443 on the PrivateLink endpoint doesn't serve REST — only the Kafka protocol (9092) works. Topic deletion uses the Cloud API (`api.confluent.cloud`) instead.
+- **PNI has no private DNS**: Confluent does not provide private DNS for PNI clusters. The bastion's NGINX proxy handles this via SNI passthrough. Kafka clients use `localhost:9092` on the bastion.
 - **S3 bucket won't delete on terraform destroy**: Not empty (Tableflow data). `force_destroy = true` handles this.
 
 ## Environment Variables
@@ -119,7 +118,8 @@ cd terraform/confluent-cloud && terraform init && terraform validate
 - `CONFLUENT_CLOUD_API_KEY` / `CONFLUENT_CLOUD_API_SECRET` — Org-level Cloud API key
 - `TABLEFLOW_API_KEY` / `TABLEFLOW_API_SECRET` — Scoped to Tableflow
 - `KAFKA_API_KEY` / `KAFKA_API_SECRET` — For Kafka protocol access (bootstrap server)
-- `KAFKA_REST_ENDPOINT` — Cluster REST endpoint (behind PrivateLink)
+- `KAFKA_REST_ENDPOINT` — Cluster REST endpoint (PNI)
+- `BOOTSTRAP_SERVER` — Kafka bootstrap endpoint (PNI — use via NGINX proxy on bastion)
 - `SCHEMA_REGISTRY_URL` / `SCHEMA_REGISTRY_API_KEY` / `SCHEMA_REGISTRY_API_SECRET`
 - `S3_BUCKET_NAME` / `PROVIDER_INTEGRATION_ID` — For BYOB setup
 

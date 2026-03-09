@@ -133,6 +133,27 @@ def test_list_tables_uses_custom_namespace(mock_get):
 
 
 @patch("catalog_sync.sources.confluent_cloud.requests.get")
+def test_list_tables_skips_topics_not_running(mock_get):
+    """Topics still materializing (phase != RUNNING) should be skipped to
+    avoid Databricks writing _delta_log before Tableflow is ready."""
+    provisioning_topic = {
+        "spec": {
+            "display_name": "new_topic",
+            "table_formats": ["DELTA"],
+            "storage": {"table_path": "s3://bucket/new_topic"},
+        },
+        "status": {"phase": "PROVISIONING"},
+    }
+    running_topic = _topic("orders", "s3://bucket/orders")
+    mock_get.return_value = _api_response([provisioning_topic, running_topic])
+
+    tables = _source().list_tables()
+
+    assert len(tables) == 1
+    assert tables[0].name == "orders"
+
+
+@patch("catalog_sync.sources.confluent_cloud.requests.get")
 def test_list_tables_passes_auth_and_params(mock_get):
     mock_get.return_value = _api_response([])
 

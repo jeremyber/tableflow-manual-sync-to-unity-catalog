@@ -1,7 +1,7 @@
 # ---------- Confluent Cloud ----------
 output "cluster_id" {
   description = "Confluent Cloud Kafka cluster ID"
-  value       = confluent_kafka_cluster.dedicated.id
+  value       = confluent_kafka_cluster.enterprise.id
 }
 
 output "environment_id" {
@@ -34,8 +34,8 @@ output "tableflow_api_secret" {
 }
 
 output "bootstrap_server" {
-  description = "Kafka bootstrap server endpoint"
-  value       = confluent_kafka_cluster.dedicated.bootstrap_endpoint
+  description = "Kafka bootstrap server endpoint (PNI — use from bastion via NGINX proxy)"
+  value       = local.pni_bootstrap_endpoint
 }
 
 output "schema_registry_url" {
@@ -82,8 +82,8 @@ output "provider_integration_id" {
 }
 
 output "kafka_rest_endpoint" {
-  description = "Kafka cluster REST endpoint"
-  value       = confluent_kafka_cluster.dedicated.rest_endpoint
+  description = "Kafka cluster REST endpoint (PNI)"
+  value       = local.pni_rest_endpoint
 }
 
 # ---------- Databricks ----------
@@ -95,6 +95,17 @@ output "databricks_catalog_name" {
 output "databricks_external_location" {
   description = "External location name in Unity Catalog"
   value       = databricks_external_location.tableflow.name
+}
+
+# ---------- PrivateLink Attachment (Console Access) ----------
+output "private_link_attachment_id" {
+  description = "Confluent PrivateLink Attachment ID (for console access)"
+  value       = confluent_private_link_attachment.console.id
+}
+
+output "private_link_attachment_dns_domain" {
+  description = "DNS domain for the PrivateLink Attachment"
+  value       = confluent_private_link_attachment.console.dns_domain
 }
 
 # ---------- Bastion Host ----------
@@ -117,17 +128,18 @@ output "topics_env" {
     CONFLUENT_CLOUD_API_SECRET="${var.confluent_cloud_api_secret}"
     TABLEFLOW_API_KEY="${confluent_api_key.tableflow.id}"
     TABLEFLOW_API_SECRET="${confluent_api_key.tableflow.secret}"
-    CLUSTER_ID="${confluent_kafka_cluster.dedicated.id}"
+    CLUSTER_ID="${confluent_kafka_cluster.enterprise.id}"
     ENVIRONMENT_ID="${confluent_environment.main.id}"
     KAFKA_API_KEY="${confluent_api_key.kafka.id}"
     KAFKA_API_SECRET="${confluent_api_key.kafka.secret}"
     SERVICE_ACCOUNT_ID="${confluent_service_account.sync.id}"
-    KAFKA_REST_ENDPOINT="${confluent_kafka_cluster.dedicated.rest_endpoint}"
+    KAFKA_REST_ENDPOINT="${local.pni_rest_endpoint}"
     SCHEMA_REGISTRY_URL="${data.confluent_schema_registry_cluster.main.rest_endpoint}"
     SCHEMA_REGISTRY_API_KEY="${confluent_api_key.schema_registry.id}"
     SCHEMA_REGISTRY_API_SECRET="${confluent_api_key.schema_registry.secret}"
     S3_BUCKET_NAME="${aws_s3_bucket.tableflow.bucket}"
     PROVIDER_INTEGRATION_ID="${confluent_provider_integration.aws.id}"
+    BOOTSTRAP_SERVER="${local.pni_bootstrap_endpoint}"
   EOT
 }
 
@@ -137,12 +149,12 @@ output "sync_env" {
   value       = <<-EOT
     CONFLUENT_API_KEY=${confluent_api_key.tableflow.id}
     CONFLUENT_API_SECRET=${confluent_api_key.tableflow.secret}
-    CONFLUENT_CLUSTER_ID=${confluent_kafka_cluster.dedicated.id}
+    CONFLUENT_CLUSTER_ID=${confluent_kafka_cluster.enterprise.id}
     CONFLUENT_ENVIRONMENT_ID=${confluent_environment.main.id}
     DATABRICKS_HOST=${var.databricks_host}
     DATABRICKS_TOKEN=${var.databricks_token}
     DATABRICKS_WAREHOUSE_ID=<YOUR_WAREHOUSE_ID>
     TARGET_CATALOG=${databricks_catalog.tableflow.name}
-    TARGET_SCHEMA=${confluent_kafka_cluster.dedicated.id}
+    TARGET_SCHEMA=${confluent_kafka_cluster.enterprise.id}
   EOT
 }

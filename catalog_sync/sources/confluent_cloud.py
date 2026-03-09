@@ -47,6 +47,18 @@ class ConfluentCloudSource(CatalogSource):
                     continue
 
                 topic_name = spec.get("display_name", "")
+
+                # Only include topics that Tableflow has fully materialized.
+                # Registering a table before materialization causes Databricks
+                # to write its own _delta_log, corrupting the Tableflow table.
+                phase = topic.get("status", {}).get("phase", "")
+                if phase != "RUNNING":
+                    logger.info(
+                        "Skipping topic '%s' — Tableflow phase is '%s', not RUNNING",
+                        topic_name, phase,
+                    )
+                    continue
+
                 # Prefer DELTA if available, otherwise take the first format
                 table_formats = spec.get("table_formats", ["DELTA"])
                 table_format = (

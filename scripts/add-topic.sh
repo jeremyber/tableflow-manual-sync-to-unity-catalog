@@ -33,7 +33,9 @@ if [ ! -f "$ENV_FILE" ]; then
   exit 1
 fi
 
+set -a
 source "$ENV_FILE"
+set +a
 
 CC_API="https://api.confluent.cloud"
 CONNECT_URL="${CC_API}/connect/v1/environments/${ENVIRONMENT_ID}/clusters/${CLUSTER_ID}/connectors"
@@ -97,5 +99,5 @@ curl -s -X POST "${CC_API}/tableflow/v1/tableflow-topics" \
 echo ""
 echo "=== Done ==="
 echo "Topic '${TOPIC}' created with Tableflow enabled."
-echo "Wait 2-3 minutes for Tableflow to materialize, then run:"
-echo "  python sync.py"
+echo "Run 'python sync.py' to register it in Unity Catalog."
+echo "(Topics still materializing are automatically skipped and picked up on the next run.)"

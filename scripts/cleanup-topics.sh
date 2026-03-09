@@ -23,7 +23,9 @@ if [ ! -f "$ENV_FILE" ]; then
   exit 1
 fi
 
+set -a
 source "$ENV_FILE"
+set +a
 
 CC_API="https://api.confluent.cloud"
 CONNECT_URL="${CC_API}/connect/v1/environments/${ENVIRONMENT_ID}/clusters/${CLUSTER_ID}/connectors"

@@ -4,11 +4,11 @@ Registers Confluent Cloud Tableflow tables in Databricks Unity Catalog — for c
 
 ## The Problem
 
-Customers running Confluent Cloud dedicated clusters with private networking have effectively chosen to **avoid public network paths for accessing their data infrastructure**, relying on PrivateLink / Private Endpoints for connectivity. Tableflow materializes Kafka topics as Delta Lake tables into customer-owned storage (BYOB), but two gaps prevent these tables from appearing in Unity Catalog:
+Customers running Confluent Cloud clusters with private networking (enterprise with PNI, or dedicated with PrivateLink) have effectively chosen to **avoid public network paths for accessing their data infrastructure**. Tableflow materializes Kafka topics as Delta Lake tables into customer-owned storage (BYOB), but two gaps prevent these tables from appearing in Unity Catalog:
 
-1. **No Iceberg REST Catalog over private networking.** Confluent's built-in Iceberg REST Catalog (IRC) — the catalog that query engines would normally use to discover Tableflow tables — is not available over PrivateLink. There is no inbound private networking support for it today.
+1. **No Iceberg REST Catalog over private networking.** Confluent's built-in Iceberg REST Catalog (IRC) — the catalog that query engines would normally use to discover Tableflow tables — is not available over private networking. There is no inbound private networking support for it today.
 
-2. **Native catalog sync can't traverse private catalog endpoints.** Tableflow's built-in integrations (Unity Catalog, Snowflake Open Catalog, Polaris) require egress connectivity from Confluent's side to the customer's catalog. When that catalog is exposed only via PrivateLink / Private Endpoints, there's currently no supported private egress path from Confluent to it.
+2. **Native catalog sync can't traverse private catalog endpoints.** Tableflow's built-in integrations (Unity Catalog, Snowflake Open Catalog, Polaris) require egress connectivity from Confluent's side to the customer's catalog. When that catalog is behind private networking, there's currently no supported private egress path from Confluent to it.
 
 The data is sitting in the customer's own S3 bucket, accessible within their VPC — but there's no private-network-compatible catalog path to register it in Unity Catalog.
 
@@ -59,13 +59,13 @@ The sync is **idempotent** — running it multiple times with no changes produce
 
 ## Using with an Existing Environment
 
-If you already have a Confluent Cloud dedicated cluster, BYOB bucket, and Databricks workspace set up, you can skip the Terraform provisioning and go straight to running the sync.
+If you already have a Confluent Cloud cluster (enterprise or dedicated) with BYOB, and a Databricks workspace set up, you can skip the Terraform provisioning and go straight to running the sync.
 
 ### What you need
 
 | Component | Requirement |
 |-----------|-------------|
-| **Confluent Cloud** | Dedicated cluster with Tableflow-enabled topics (BYOB) |
+| **Confluent Cloud** | Enterprise or dedicated cluster with Tableflow-enabled topics (BYOB) |
 | **Tableflow API key** | Scoped to Tableflow (`managed_resource: tableflow/v1`) — not an org-level Cloud API key |
 | **Databricks** | Workspace with Unity Catalog, a SQL warehouse, and a personal access token |
 | **Databricks storage credential** | IAM role (AWS) or managed identity (Azure) that can read the BYOB bucket |
@@ -94,7 +94,6 @@ If you already have a Confluent Cloud dedicated cluster, BYOB bucket, and Databr
     python3 -m venv .venv && source .venv/bin/activate
     pip install -e .
 
-    set -a && source .env.sync && set +a
     python sync.py
     ```
 
@@ -108,7 +107,9 @@ All commands below assume you start from the **project root** (where `sync.py` a
 
 ### Phase 1: Provision Infrastructure
 
-Terraform creates everything: Confluent Cloud dedicated cluster with PrivateLink, BYOB S3 bucket, VPC + networking, a bastion host, and Databricks resources (storage credential, external location, catalog, schema).
+Terraform creates everything: Confluent Cloud enterprise cluster with PNI (Private Network Interface), BYOB S3 bucket, VPC + networking, ENIs, a bastion host with NGINX proxy, and Databricks resources (storage credential, external location, catalog, schema).
+
+> **Note:** The Terraform provisions an enterprise cluster. For dedicated clusters with PrivateLink, see the git history or [Confluent docs](https://docs.confluent.io/cloud/current/networking/private-links/aws-privatelink.html).
 
 ```bash
 # From: project root
@@ -140,7 +141,7 @@ Apply:
 terraform init && terraform apply
 ```
 
-This takes ~30 minutes (dedicated cluster provisioning). When done, generate the env files:
+When done, generate the env files:
 
 ```bash
 # From: terraform/confluent-cloud/
@@ -150,7 +151,7 @@ terraform output -raw sync_env   > ../../.env.sync
 
 > **Note:** Edit `.env.sync` (in the project root) and fill in `DATABRICKS_WAREHOUSE_ID` with your SQL warehouse ID.
 
-A **bastion host** is provisioned in the public subnet for Kafka data-plane operations over PrivateLink. The SSH key is saved to `terraform/confluent-cloud/bastion-key.pem`:
+A **bastion host** is provisioned in the public subnet with an NGINX stream proxy for Kafka data-plane operations through PNI. The SSH key is saved to `terraform/confluent-cloud/bastion-key.pem`:
 
 ```bash
 # From: terraform/confluent-cloud/
@@ -171,7 +172,7 @@ The script:
 2. Waits for connectors to reach `RUNNING` state
 3. Enables **Tableflow** on each topic via the Tableflow API (BYOB to the S3 bucket from Phase 1)
 
-After the script completes, wait 2-3 minutes for Tableflow to materialize the initial Delta files in S3.
+After the script completes, Tableflow begins materializing Delta files in S3. The sync script automatically checks that each topic's Tableflow status is `RUNNING` before registering it — topics still materializing are skipped and will be picked up on the next run.
 
 ### Phase 3: Run the Sync (Demo)
 
@@ -182,10 +183,7 @@ After the script completes, wait 2-3 minutes for Tableflow to materialize the in
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e .
 
-# Load environment variables
-set -a && source .env.sync && set +a
-
-# Run the sync
+# Run the sync (auto-loads .env.sync from the project root)
 python sync.py
 ```
 
@@ -228,17 +226,17 @@ Done: 0 added, 0 updated, 0 removed
 # From: project root (your local machine) — add a third topic
 ./scripts/add-topic.sh pageviews PAGEVIEWS
 
-# Wait 2-3 minutes for Tableflow to materialize, then re-run sync
+# Re-run sync (safe to run immediately — topics still materializing are skipped)
 python sync.py
 ```
 
-Expected: `1 added, 0 updated, 0 removed` — the new `pageviews` table appears in Unity Catalog alongside `orders` and `customers`.
+Expected: `1 added, 0 updated, 0 removed` — the new `pageviews` table appears in Unity Catalog alongside `orders` and `customers`. If the topic hasn't finished materializing yet, it will show as skipped and will be picked up on the next run.
 
 Other available quickstart templates: `CLICKSTREAM`, `INVENTORY`, `CREDIT_CARDS`, `TRANSACTIONS`, `STORES`, `PRODUCTS`.
 
 ## Configuration
 
-All configuration is via environment variables. Set them directly or use a `.env.sync` file (in the project root).
+All configuration is via environment variables. `sync.py` automatically loads `.env.sync` from the project root if present. You can also set variables directly in the environment (env vars take precedence over the file).
 
 | Variable | Required | Description |
 |----------|----------|-------------|
@@ -355,7 +353,7 @@ Clean up Confluent Cloud resources **before** running `terraform destroy` — Ta
 ./scripts/cleanup-topics.sh
 ```
 
-**Full teardown** (including topic deletion — requires bastion for PrivateLink access):
+**Full teardown** (including topic deletion — requires bastion for PNI access):
 
 ```bash
 # From: project root (your local machine) — copy scripts to bastion
@@ -397,7 +395,7 @@ exit
 ./scripts/setup-topics.sh
 ```
 
-> **Note:** Topic deletion on dedicated PrivateLink clusters requires running from within the PrivateLink network (e.g., bastion). The Kafka REST API (port 443) is not served over PrivateLink — `delete-topics.py` uses the Kafka protocol (port 9092) via a Python admin client instead.
+> **Note:** Topic deletion on privately-networked clusters requires running from within the private network (e.g., bastion). The bastion runs an NGINX stream proxy that forwards Kafka traffic (port 9092) through the PNI ENIs. `delete-topics.py` uses the Kafka protocol via a Python admin client, connecting through the NGINX proxy on `localhost:9092`.
 
 ## Running Tests
 
@@ -416,7 +414,7 @@ The sensitive data path — customer data flowing from S3 into Databricks — ne
 | Path | How | Private? |
 |------|-----|----------|
 | Databricks queries → S3 (reading table data) | S3 Gateway VPC Endpoint | **Yes** |
-| Kafka producers/consumers → Confluent Cloud | AWS PrivateLink | **Yes** |
+| Kafka producers/consumers → Confluent Cloud | PNI (Private Network Interface) | **Yes** |
 
 ### What crosses the public internet
 
@@ -424,13 +422,13 @@ The sync script makes one outbound HTTPS call to the Confluent Cloud control pla
 
 ### Why this is acceptable
 
-The Confluent Cloud control plane (`api.confluent.cloud`) is a **public-only endpoint** — there is no PrivateLink option for it ([docs](https://docs.confluent.io/cloud/current/networking/private-links/index.html)). Every Confluent Cloud customer, including those with fully private PrivateLink clusters, already relies on Confluent's public control-plane APIs for activities like logging into the console, using the CLI, and managing connectors, schemas, and Tableflow.
+The Confluent Cloud control plane (`api.confluent.cloud`) is a **public-only endpoint** — there is no private networking option for it ([docs](https://docs.confluent.io/cloud/current/networking/private-links/index.html)). Every Confluent Cloud customer, including those with fully private clusters, already relies on Confluent's public control-plane APIs for activities like logging into the console, using the CLI, and managing connectors, schemas, and Tableflow.
 
 This sync script makes the same API call that a human would make by logging into the console and copying a storage path. The only difference is automation.
 
 ### Bastion host
 
-The bastion host sits in the **public subnet** (for SSH access) and can reach Kafka endpoints via PrivateLink DNS (Route53 private zone associated with the VPC). It's available for any Kafka data-plane operations that require PrivateLink connectivity.
+The bastion host sits in the **public subnet** (for SSH access) and runs an NGINX stream proxy that forwards Kafka (9092) and HTTPS (443) traffic through the PNI ENIs in the private subnets. PNI does not provide private DNS, so the NGINX proxy uses SNI passthrough to route traffic to the correct Confluent endpoints. Kafka clients on the bastion connect to `localhost:9092`.
 
 ### Credential handling
 
@@ -445,13 +443,14 @@ Both credentials are transmitted over TLS. For automated deployments, store them
 
 - **External tables, not foreign catalogs.** Unity Catalog "foreign catalogs" are for RDBMS/JDBC. Tableflow tables use `CREATE EXTERNAL TABLE ... USING DELTA|ICEBERG LOCATION`.
 - **Metadata only.** Tables are registered by storage location reference. No data is copied.
+- **Safe to run anytime.** The sync checks each topic's Tableflow `status.phase` — only topics in `RUNNING` state are registered. Topics still materializing are skipped. The Databricks external location is read-only, so even a premature registration can't corrupt the Delta log.
 - **Runs anywhere.** The sync script has no cloud-specific dependencies. Run it on your laptop, a bastion host, Lambda, Azure Functions, or a Kubernetes pod.
 - **BYOB required.** Confluent-Managed Storage (CMS) does not work with private networking. BYOB is the supported path.
 - **Delta and Iceberg.** The engine reads the table format from the Confluent Cloud API and uses `USING DELTA` or `USING ICEBERG` accordingly.
 
 ## Future: Native Sync
 
-When Confluent adds private networking support for the Iceberg REST Catalog or enables native catalog sync (Unity Catalog, Polaris, etc.) over PrivateLink, this tool becomes unnecessary. To migrate:
+When Confluent adds private networking support for the Iceberg REST Catalog or enables native catalog sync (Unity Catalog, Polaris, etc.) over private networking, this tool becomes unnecessary. To migrate:
 
 1. Drop the externally registered tables (`DROP TABLE ...` — metadata only, data untouched)
 2. Enable Tableflow's built-in catalog integration
