@@ -15,6 +15,7 @@ class SyncResult:
     added: int = 0
     updated: int = 0
     removed: int = 0
+    tags_synced: int = 0
 
     @property
     def total_changes(self) -> int:
@@ -22,9 +23,15 @@ class SyncResult:
 
 
 class SyncEngine:
-    def __init__(self, source: CatalogSource, target: CatalogTarget) -> None:
+    def __init__(
+        self,
+        source: CatalogSource,
+        target: CatalogTarget,
+        sync_tags: bool = False,
+    ) -> None:
         self._source = source
         self._target = target
+        self._sync_tags = sync_tags
 
     def sync(self) -> SyncResult:
         source_tables = {t.full_name: t for t in self._source.list_tables()}
@@ -38,18 +45,24 @@ class SyncEngine:
         to_check = source_names & target_names
 
         added = 0
+        tags_synced = 0
         for name in sorted(to_add):
             table = source_tables[name]
             logger.info("Registering new table: %s at %s", name, table.location)
             self._target.register_table(table)
             added += 1
+            if self._sync_tags and table.tags:
+                tags_synced += self._target.sync_tags(table)
 
         updated = 0
         for name in sorted(to_check):
-            if self._needs_update(source_tables[name], target_tables[name]):
+            source_table = source_tables[name]
+            if self._needs_update(source_table, target_tables[name]):
                 logger.info("Updating table: %s", name)
-                self._target.update_table(source_tables[name])
+                self._target.update_table(source_table)
                 updated += 1
+            if self._sync_tags:
+                tags_synced += self._target.sync_tags(source_table)
 
         removed = 0
         for name in sorted(to_remove):
@@ -58,7 +71,10 @@ class SyncEngine:
             self._target.remove_table(table.namespace, table.name)
             removed += 1
 
-        result = SyncResult(added=added, updated=updated, removed=removed)
+        result = SyncResult(
+            added=added, updated=updated, removed=removed,
+            tags_synced=tags_synced,
+        )
         logger.info("Sync complete: %s", result)
         return result
 

@@ -26,6 +26,12 @@ class SyncConfig:
     confluent_cluster_id: str | None = None
     confluent_environment_id: str | None = None
 
+    # Tag sync (Stream Catalog / Schema Registry)
+    sync_tags: bool = True
+    schema_registry_url: str | None = None
+    schema_registry_api_key: str | None = None
+    schema_registry_api_secret: str | None = None
+
     @classmethod
     def from_env(cls) -> SyncConfig:
         source_type = SourceType(os.environ["SOURCE_TYPE"])
@@ -40,6 +46,10 @@ class SyncConfig:
             confluent_api_secret=os.environ.get("CONFLUENT_API_SECRET"),
             confluent_cluster_id=os.environ.get("CONFLUENT_CLUSTER_ID"),
             confluent_environment_id=os.environ.get("CONFLUENT_ENVIRONMENT_ID"),
+            sync_tags=os.environ.get("SYNC_TAGS", "true").lower() == "true",
+            schema_registry_url=os.environ.get("SCHEMA_REGISTRY_URL"),
+            schema_registry_api_key=os.environ.get("SCHEMA_REGISTRY_API_KEY"),
+            schema_registry_api_secret=os.environ.get("SCHEMA_REGISTRY_API_SECRET"),
         )
         if config.source_type == SourceType.CONFLUENT_API:
             missing = [
@@ -54,4 +64,16 @@ class SyncConfig:
                 raise ValueError(
                     f"{', '.join(missing)} required when SOURCE_TYPE is confluent_api"
                 )
+            if config.sync_tags:
+                missing_sr = [
+                    name for name, val in [
+                        ("SCHEMA_REGISTRY_URL", config.schema_registry_url),
+                        ("SCHEMA_REGISTRY_API_KEY", config.schema_registry_api_key),
+                        ("SCHEMA_REGISTRY_API_SECRET", config.schema_registry_api_secret),
+                    ] if not val
+                ]
+                if missing_sr:
+                    raise ValueError(
+                        f"{', '.join(missing_sr)} required when SYNC_TAGS is true"
+                    )
         return config

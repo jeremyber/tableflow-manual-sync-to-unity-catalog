@@ -21,6 +21,10 @@ def build_source(config: SyncConfig):
             cluster_id=config.confluent_cluster_id,
             environment_id=config.confluent_environment_id,
             namespace=config.target_schema,
+            schema_registry_url=config.schema_registry_url,
+            schema_registry_api_key=config.schema_registry_api_key,
+            schema_registry_api_secret=config.schema_registry_api_secret,
+            sync_tags=config.sync_tags,
         )
     raise ValueError(f"Unsupported source type: {config.source_type}")
 
@@ -38,7 +42,11 @@ def build_target(config: SyncConfig):
 def lambda_handler(event: dict, context) -> dict:
     logging.basicConfig(level=logging.INFO)
     config = SyncConfig.from_env()
-    engine = SyncEngine(build_source(config), build_target(config))
+    engine = SyncEngine(
+        build_source(config),
+        build_target(config),
+        sync_tags=config.sync_tags,
+    )
     result = engine.sync()
 
     return {
@@ -47,6 +55,7 @@ def lambda_handler(event: dict, context) -> dict:
             "added": result.added,
             "updated": result.updated,
             "removed": result.removed,
+            "tags_synced": result.tags_synced,
             "total_changes": result.total_changes,
         }),
     }
