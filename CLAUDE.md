@@ -20,13 +20,15 @@ Customers must already have:
 
 ## Architecture
 
-- **sync.py**: Self-contained entry point — runs from laptop, auto-loads `.env.sync` from project root, reads Confluent Cloud API for topic discovery, registers tables in Databricks. No imports from catalog_sync modules (except databricks SDK and requests).
+- **sync.py**: Self-contained entry point — full sync (tables + tags). Runs from laptop, auto-loads `.env.sync` from project root. Discovers topics via Tableflow API, registers tables in Databricks, syncs governance tags via GraphQL.
+- **sync_tags.py**: Tags-only sync — for use when CC native catalog sync handles table creation. Reads existing UC tables, fetches tags via GraphQL, applies via `ALTER TABLE SET TAGS`.
 - **catalog_sync/**: Modular Python engine (used by Lambda handler)
-  - `sources/confluent_cloud.py`: Discovers Tableflow-enabled topics via REST API
-  - `targets/unity_catalog.py`: Registers external tables in Databricks via SDK SQL execution
-  - `engine.py`: Diff-based sync orchestration (add/update/remove tables)
+  - `sources/confluent_cloud.py`: Discovers Tableflow-enabled topics via REST API + fetches tags via Stream Catalog GraphQL API
+  - `targets/unity_catalog.py`: Registers external tables + syncs governance tags via Databricks SQL
+  - `engine.py`: Diff-based sync orchestration (add/update/remove tables + tag sync)
   - `handler.py`: Builds source + target, runs engine (Lambda entry point)
   - `config.py`: Environment-variable-driven configuration
+  - `models.py`: TableInfo (with `tags: dict[str, str]`), ColumnInfo, tag key sanitization
 - **terraform/confluent-cloud/**: Provisions all infrastructure (CC enterprise cluster, VPC, PNI ENIs, BYOB, bastion with NGINX proxy, Databricks resources)
 - **terraform/demo/**: Optional Lambda + EventBridge deployment
 - **scripts/**: Topic setup (`setup-topics.sh`), cleanup (`cleanup-topics.sh`), live demo (`add-topic.sh`), Lambda packaging (`build_lambda.sh`)
@@ -42,6 +44,7 @@ Customers must already have:
 | Operation | Where | Why |
 |-----------|-------|-----|
 | `sync.py` | Laptop (or any compute) | Uses Confluent Cloud public API + Databricks HTTPS |
+| `sync_tags.py` | Laptop (or any compute) | Uses SR GraphQL API + Databricks HTTPS (no Tableflow API needed) |
 | `setup-topics.sh` | Laptop | Uses Confluent Cloud public API (Connect, Tableflow) |
 | `add-topic.sh` | Laptop | Uses Confluent Cloud public API |
 | `cleanup-topics.sh` | Laptop (partial) + Bastion (topics) | Steps 1-3 use public API; topic deletion uses Kafka protocol (9092) via PNI |
@@ -62,13 +65,19 @@ Customers must already have:
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 
-# Run sync (auto-loads .env.sync from project root)
+# Run full sync — tables + tags (auto-loads .env.sync from project root)
 python sync.py
+
+# Run tags-only sync — for use with CC native catalog sync
+python sync_tags.py
+
+# Disable tag sync in full sync mode
+SYNC_TAGS=false python sync.py
 
 # Tests (must run from project root)
 pytest tests/ -v
 pytest tests/unit/test_engine.py -v                 # single file
-pytest tests/unit/test_engine.py::test_sync_registers_new_tables -v  # single test
+pytest tests/unit/test_tag_sync.py -v               # tag sync tests
 
 # Terraform
 cd terraform/confluent-cloud && terraform init && terraform validate
@@ -84,6 +93,16 @@ cd terraform/confluent-cloud && terraform init && terraform validate
 - **Runs anywhere**: sync.py has no cloud-specific dependencies (`requests` + `databricks-sdk`)
 - **BYOB required**: Confluent-Managed Storage (CMS) does not work with private networking
 - **S3 bucket has `force_destroy = true`**: Tableflow writes data; bucket must be emptied on destroy
+
+## Tag Sync Design
+
+- **Tag source**: Stream Catalog GraphQL API (`POST {SR_URL}/catalog/graphql`) — returns classification tags + business metadata for all topics in 1-2 paginated calls (limit 500/page)
+- **Tag destination**: UC table tags via `ALTER TABLE SET TAGS` — immediately available for UC access policies
+- **Tag mapping**: Classification `PII` → `PII=true`. BM `DataOwnership.owner=team` → `DataOwnership_owner=team`. UC-prohibited chars (`. , - = / :`) replaced with `_`
+- **Manifest tracking**: `_confluent_managed_tags` tag stores CSV of managed keys — prevents clobbering UC-native tags
+- **Tombstoning**: Removed tags get value `__tombstone__` (audit trail). Already-tombstoned tags not re-tombstoned
+- **Error isolation**: Tag sync failures per table are logged and skipped, don't block other tables
+- **SR PrivateLink**: If SR PrivateLink is enabled, `SCHEMA_REGISTRY_URL` must be set to the Stream Catalog URL (`STREAM_CATALOG_URL`)
 
 ## Confluent Cloud API Details
 
@@ -105,7 +124,7 @@ cd terraform/confluent-cloud && terraform init && terraform validate
 
 ## Environment Variables
 
-### sync.py / .env.sync
+### sync.py / .env.sync (full sync — tables + tags)
 - `CONFLUENT_API_KEY` / `CONFLUENT_API_SECRET` — Tableflow API key
 - `CONFLUENT_CLUSTER_ID` — Kafka cluster ID (e.g., lkc-xxxxx)
 - `CONFLUENT_ENVIRONMENT_ID` — Environment ID (e.g., env-xxxxx)
@@ -113,6 +132,16 @@ cd terraform/confluent-cloud && terraform init && terraform validate
 - `DATABRICKS_WAREHOUSE_ID` — SQL warehouse ID
 - `TARGET_CATALOG` — Unity Catalog catalog name
 - `TARGET_SCHEMA` — Schema name (defaults to "default")
+- `SYNC_TAGS` — Enable tag sync (defaults to "true")
+- `SCHEMA_REGISTRY_URL` — SR endpoint (or Stream Catalog URL for SR PrivateLink). Required when SYNC_TAGS=true
+- `SCHEMA_REGISTRY_API_KEY` / `SCHEMA_REGISTRY_API_SECRET` — SR API credentials. Required when SYNC_TAGS=true
+
+### sync_tags.py (tags-only sync — for use with CC native catalog sync)
+- `CONFLUENT_CLUSTER_ID` — Kafka cluster ID (to filter topics by cluster)
+- `SCHEMA_REGISTRY_URL` / `SCHEMA_REGISTRY_API_KEY` / `SCHEMA_REGISTRY_API_SECRET` — SR endpoint + credentials
+- `DATABRICKS_HOST` / `DATABRICKS_TOKEN` — Workspace URL + PAT
+- `DATABRICKS_WAREHOUSE_ID` — SQL warehouse ID
+- `TARGET_CATALOG` / `TARGET_SCHEMA` — Unity Catalog catalog + schema name
 
 ### scripts / .env.topics
 - `CONFLUENT_CLOUD_API_KEY` / `CONFLUENT_CLOUD_API_SECRET` — Org-level Cloud API key
