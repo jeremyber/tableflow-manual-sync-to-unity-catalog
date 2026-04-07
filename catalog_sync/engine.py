@@ -60,7 +60,10 @@ class SyncEngine:
             self._target.register_table(table)
             added += 1
             if do_tag_sync:
-                tags_synced += self._target.sync_tags(table)
+                try:
+                    tags_synced += self._target.sync_tags(table)
+                except RuntimeError:
+                    logger.warning("Tag sync failed for %s, continuing", name, exc_info=True)
 
         updated = 0
         for name in sorted(to_check):
@@ -70,7 +73,10 @@ class SyncEngine:
                 self._target.update_table(source_table)
                 updated += 1
             if do_tag_sync:
-                tags_synced += self._target.sync_tags(source_table)
+                try:
+                    tags_synced += self._target.sync_tags(source_table)
+                except RuntimeError:
+                    logger.warning("Tag sync failed for %s, continuing", name, exc_info=True)
 
         removed = 0
         for name in sorted(to_remove):

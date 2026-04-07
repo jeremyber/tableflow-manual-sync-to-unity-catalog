@@ -137,6 +137,12 @@ while url:
 
         name = spec.get("display_name", "")
 
+        try:
+            _validate_identifier(name, "topic name")
+        except ValueError:
+            print(f"  Skipping topic with unsafe name: {name!r}")
+            continue
+
         # Only register tables that Tableflow has fully materialized.
         # Without this check, CREATE TABLE ... USING DELTA LOCATION on
         # an empty path causes Databricks to write its own _delta_log,

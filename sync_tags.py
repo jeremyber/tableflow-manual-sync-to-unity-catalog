@@ -353,7 +353,7 @@ for name in sorted(table_names):
 
     # Update manifest
     new_managed = sorted(k for k in topic_tags.keys() if k)
-    manifest_changed = list(previously_managed) != new_managed if previously_managed else bool(new_managed)
+    manifest_changed = sorted(previously_managed) != new_managed if previously_managed else bool(new_managed)
     manifest[name] = new_managed
 
     if table_changes:
