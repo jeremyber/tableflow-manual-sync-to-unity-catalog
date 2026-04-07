@@ -322,6 +322,25 @@ Additional environment variables for tag sync (required when `SYNC_TAGS=true`, o
 
 ### Running tags-only sync
 
+Create a `.env.sync` with the tags-only configuration (no Tableflow API key needed):
+
+```bash
+CONFLUENT_CLUSTER_ID=lkc-xxxxx
+SCHEMA_REGISTRY_URL=https://psrc-xxxxx.region.aws.confluent.cloud
+SCHEMA_REGISTRY_API_KEY=<sr-api-key>
+SCHEMA_REGISTRY_API_SECRET=<sr-api-secret>
+DATABRICKS_HOST=https://dbc-xxxxx.cloud.databricks.com
+DATABRICKS_TOKEN=dapiXXXXXXXX
+# Or use service principal instead of token:
+# DATABRICKS_CLIENT_ID=<client-id>
+# DATABRICKS_CLIENT_SECRET=<client-secret>
+DATABRICKS_WAREHOUSE_ID=<warehouse-id>
+TARGET_CATALOG=<catalog-name>
+TARGET_SCHEMA=<schema-name>
+```
+
+Then run:
+
 ```bash
 # From: project root
 python sync_tags.py
