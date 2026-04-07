@@ -56,7 +56,7 @@ The sync is **idempotent** — running it multiple times with no changes produce
 
 - **Confluent Cloud** account with a Cloud API key (org-level)
 - **AWS account** with permissions to create VPC, IAM, S3, EC2 resources
-- **Databricks workspace** with Unity Catalog, a personal access token, and a SQL warehouse
+- **Databricks workspace** with Unity Catalog and a SQL warehouse (see [SQL warehouse note](#sql-warehouse-note) on cost)
 - **Tools**: Python 3.11+, Terraform 1.5+, AWS CLI configured
 
 ## Using with an Existing Environment
@@ -285,9 +285,9 @@ Tags are fetched from the [Stream Catalog GraphQL API](https://docs.confluent.io
 | BM `DataOwnership` → `priority=1` (int) | `DataOwnership_priority = 1` (stringified) |
 
 **Safety:**
-- UC-native tags (added directly in Databricks) are never overwritten
-- A manifest tag (`_confluent_managed_tags`) tracks which tags are managed by this tool
-- Removed tags are tombstoned (`__tombstone__`) for audit trail compliance
+- UC-native tags (added directly in Databricks) are never touched
+- A manifest tracks which tags are managed by this tool (stored in Databricks workspace)
+- Tags removed from Confluent are fully removed from UC via `ALTER TABLE UNSET TAGS`
 - Tag sync failures don't block table sync
 
 ### Two modes of operation
@@ -361,7 +361,7 @@ Test the sync loop:
 |---|---|---|
 | Add a classification tag (e.g., `PII`) to a topic in the CC Console | `python sync_tags.py` | `PII=true` appears on UC table |
 | Add business metadata to a topic in the CC Console | `python sync_tags.py` | `TypeName_attr=value` appears on UC table |
-| Remove a tag from a topic in the CC Console | `python sync_tags.py` | Tag tombstoned (`__tombstone__`) in UC |
+| Remove a tag from a topic in the CC Console | `python sync_tags.py` | Tag removed from UC |
 | Add a tag directly on the UC table in Databricks | `python sync_tags.py` | UC-native tag untouched |
 | No changes | `python sync_tags.py` | `0 tag change(s) applied` |
 

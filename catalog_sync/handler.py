@@ -36,6 +36,8 @@ def build_target(config: SyncConfig):
         catalog_name=config.target_catalog,
         warehouse_id=config.databricks_warehouse_id,
         schema_name=config.target_schema,
+        client_id=config.databricks_client_id,
+        client_secret=config.databricks_client_secret,
     )
 
 

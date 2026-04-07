@@ -5,7 +5,14 @@ import logging
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.service.sql import Disposition, Format
 
-from catalog_sync.models import ColumnInfo, TableInfo, MANAGED_TAGS_KEY, TOMBSTONE_VALUE
+from catalog_sync.models import ColumnInfo, TableInfo, validate_identifier, validate_table_format
+
+# Allowed column types for Unity Catalog
+_VALID_COLUMN_TYPES = {
+    "STRING", "INT", "BIGINT", "LONG", "FLOAT", "DOUBLE",
+    "BOOLEAN", "DATE", "TIMESTAMP", "BINARY", "DECIMAL",
+    "ARRAY", "MAP", "STRUCT",
+}
 from catalog_sync.targets.base import CatalogTarget
 
 logger = logging.getLogger(__name__)
@@ -15,18 +22,27 @@ class UnityCatalogTarget(CatalogTarget):
     def __init__(
         self,
         host: str,
-        token: str,
-        catalog_name: str,
+        token: str | None = None,
+        catalog_name: str = "default",
         warehouse_id: str | None = None,
         schema_name: str = "default",
+        client_id: str | None = None,
+        client_secret: str | None = None,
     ) -> None:
         self._catalog_name = catalog_name
         self._warehouse_id = warehouse_id
         self._schema_name = schema_name
-        self._ws = WorkspaceClient(host=host, token=token)
+        if client_id and client_secret:
+            self._ws = WorkspaceClient(
+                host=host, client_id=client_id, client_secret=client_secret,
+            )
+        else:
+            self._ws = WorkspaceClient(host=host, token=token)
         self._ensure_catalog_and_schema()
 
     def _ensure_catalog_and_schema(self) -> None:
+        validate_identifier(self._catalog_name, "catalog name")
+        validate_identifier(self._schema_name, "schema name")
         logger.info("Ensuring catalog %s and schema %s exist", self._catalog_name, self._schema_name)
         self._execute(f"CREATE CATALOG IF NOT EXISTS `{self._catalog_name}`")
         self._execute(f"CREATE SCHEMA IF NOT EXISTS `{self._catalog_name}`.`{self._schema_name}`")
@@ -40,18 +56,24 @@ class UnityCatalogTarget(CatalogTarget):
             disposition=Disposition.INLINE,
             format=Format.JSON_ARRAY,
         )
-        if result.status and result.status.state and result.status.state.value == "FAILED":
-            error_msg = result.status.error.message if result.status.error else "Unknown error"
-            raise RuntimeError(f"SQL execution failed: {error_msg}")
+        if result.status and result.status.state:
+            state = result.status.state.value
+            if state == "FAILED":
+                error_msg = result.status.error.message if result.status.error else "Unknown error"
+                raise RuntimeError(f"SQL execution failed: {error_msg}")
+            if state != "SUCCEEDED":
+                raise RuntimeError(f"SQL did not complete (state={state})")
         return result
 
     def _full_table_name(self, namespace: str, name: str) -> str:
+        validate_identifier(namespace, "namespace")
+        validate_identifier(name, "table name")
         return f"`{self._catalog_name}`.`{namespace}`.`{name}`"
 
     def list_tables(self) -> list[TableInfo]:
         sql = (
             f"SELECT table_schema, table_name, comment "
-            f"FROM {self._catalog_name}.information_schema.tables "
+            f"FROM `{self._catalog_name}`.information_schema.tables "
             f"WHERE table_type = 'EXTERNAL'"
         )
         result = self._execute(sql)
@@ -71,17 +93,26 @@ class UnityCatalogTarget(CatalogTarget):
     def register_table(self, table: TableInfo) -> None:
         columns_part = ""
         if table.columns:
+            for c in table.columns:
+                validate_identifier(c.name, "column name")
+                col_type_upper = c.type.upper()
+                if col_type_upper not in _VALID_COLUMN_TYPES:
+                    raise ValueError(
+                        f"Invalid column type: {c.type!r} for column {c.name!r} "
+                        f"— expected one of {_VALID_COLUMN_TYPES}"
+                    )
             columns_sql = ", ".join(
                 f"`{c.name}` {c.type}" for c in table.columns
             )
             columns_part = f" ({columns_sql})"
-        escaped_location = table.location.replace("'", "\\'")
+        escaped_location = table.location.replace("'", "''")
+        table_format = validate_table_format(table.table_format)
         sql = (
             f"CREATE TABLE IF NOT EXISTS "
             f"{self._full_table_name(table.namespace, table.name)}"
             f"{columns_part} "
-            f"USING {table.table_format} "
-            f"LOCATION '{table.location}' "
+            f"USING {table_format} "
+            f"LOCATION '{escaped_location}' "
             f"COMMENT '{escaped_location}'"
         )
         logger.info("Registering table: %s.%s", table.namespace, table.name)
@@ -104,7 +135,7 @@ class UnityCatalogTarget(CatalogTarget):
         escaped_name = name.replace("'", "''")
         sql = (
             f"SELECT tag_name, tag_value "
-            f"FROM {self._catalog_name}.information_schema.table_tags "
+            f"FROM `{self._catalog_name}`.information_schema.table_tags "
             f"WHERE schema_name = '{escaped_ns}' AND table_name = '{escaped_name}'"
         )
         try:
@@ -135,58 +166,88 @@ class UnityCatalogTarget(CatalogTarget):
         sql = f"ALTER TABLE {ftn} SET TAGS ({tag_pairs})"
         self._execute(sql)
 
+    _MANAGED_KEYS_PROP = "_confluent_managed_tags"
+
+    def _read_managed_keys(self, namespace: str, name: str) -> set[str]:
+        """Read the set of tag keys managed by this tool from table properties."""
+        ftn = self._full_table_name(namespace, name)
+        try:
+            result = self._execute(
+                f"SHOW TBLPROPERTIES {ftn} ('{self._MANAGED_KEYS_PROP}')"
+            )
+            if result.result and result.result.data_array:
+                val = result.result.data_array[0][1] or ""
+                if val and "does not have property" not in val:
+                    return {k for k in val.split(",") if k}
+        except RuntimeError:
+            pass
+        return set()
+
+    def _write_managed_keys(self, namespace: str, name: str, keys: set[str]) -> None:
+        """Store managed tag keys in table properties (invisible in tags view)."""
+        ftn = self._full_table_name(namespace, name)
+        val = ",".join(sorted(keys)).replace("'", "''")
+        try:
+            self._execute(
+                f"ALTER TABLE {ftn} SET TBLPROPERTIES ('{self._MANAGED_KEYS_PROP}' = '{val}')"
+            )
+        except RuntimeError:
+            logger.debug("Could not write managed keys for %s.%s", namespace, name)
+
+    def _unset_tags(self, namespace: str, name: str, keys: set[str]) -> None:
+        """Remove tags from a table via ALTER TABLE UNSET TAGS."""
+        if not keys:
+            return
+        ftn = self._full_table_name(namespace, name)
+        key_list = ", ".join(
+            f"'{k.replace(chr(39), chr(39)+chr(39))}'" for k in sorted(keys)
+        )
+        self._execute(f"ALTER TABLE {ftn} UNSET TAGS ({key_list})")
+
     def sync_tags(self, table: TableInfo) -> int:
         """Sync governance tags from Confluent to a Unity Catalog table.
 
         - Adds new tags from Confluent
         - Updates tags whose values changed
-        - Tombstones tags that were previously managed by Confluent
-          but no longer exist in the source
-        - Preserves tags added directly in UC (not managed by Confluent)
-        - Tracks managed keys via the _confluent_managed_tags manifest
+        - Removes tags previously managed by us that no longer exist in Confluent
+        - Preserves tags added directly in UC (not in manifest)
+        - Tracks managed keys in table properties (invisible in tags view)
 
         Returns the number of tag changes applied.
         """
         current_tags = self._read_table_tags(table.namespace, table.name)
         source_tags = table.tags
-
-        # Parse the manifest of previously managed keys
-        managed_csv = current_tags.get(MANAGED_TAGS_KEY, "")
-        previously_managed = (
-            {k for k in managed_csv.split(",") if k} if managed_csv else set()
-        )
+        previously_managed = self._read_managed_keys(table.namespace, table.name)
 
         tags_to_set: dict[str, str] = {}
+        tags_to_remove: set[str] = set()
         changes = 0
 
-        # Add or update tags from source
+        # Add or update
         for key, value in source_tags.items():
-            current_value = current_tags.get(key)
-            if current_value != value:
+            if not key:
+                continue
+            if current_tags.get(key) != value:
                 tags_to_set[key] = value
                 changes += 1
 
-        # Tombstone tags that were managed by us but removed from source
-        to_tombstone = previously_managed - set(source_tags.keys())
-        for key in to_tombstone:
-            current_value = current_tags.get(key)
-            if current_value is not None and current_value != TOMBSTONE_VALUE:
-                tags_to_set[key] = TOMBSTONE_VALUE
+        # Remove tags we previously managed but are no longer in source
+        for key in previously_managed - set(source_tags.keys()):
+            if key in current_tags:
+                tags_to_remove.add(key)
                 changes += 1
 
-        # Update the manifest with current source keys
-        new_managed = set(source_tags.keys())
-        if new_managed != previously_managed or MANAGED_TAGS_KEY not in current_tags:
-            tags_to_set[MANAGED_TAGS_KEY] = ",".join(sorted(new_managed))
-            # Only count as a change if actual tags changed, not just manifest
-            if not (changes == 0 and new_managed == previously_managed):
-                pass  # already counted above
-
         if tags_to_set:
-            logger.info(
-                "Syncing %d tag change(s) for %s.%s",
-                changes, table.namespace, table.name,
-            )
+            logger.info("Setting %d tag(s) for %s.%s", len(tags_to_set), table.namespace, table.name)
             self._set_tags(table.namespace, table.name, tags_to_set)
+
+        if tags_to_remove:
+            logger.info("Removing %d stale tag(s) for %s.%s", len(tags_to_remove), table.namespace, table.name)
+            self._unset_tags(table.namespace, table.name, tags_to_remove)
+
+        # Update manifest
+        new_managed = {k for k in source_tags.keys() if k}
+        if new_managed != previously_managed:
+            self._write_managed_keys(table.namespace, table.name, new_managed)
 
         return changes

@@ -66,4 +66,6 @@ def test_build_target():
             catalog_name="tf_catalog",
             warehouse_id=None,
             schema_name="default",
+            client_id=None,
+            client_secret=None,
         )

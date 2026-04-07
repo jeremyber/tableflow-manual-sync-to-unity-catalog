@@ -4,7 +4,7 @@ import logging
 
 import requests
 
-from catalog_sync.models import TableInfo, sanitize_tag_key
+from catalog_sync.models import TableInfo, sanitize_tag_key, validate_table_format
 from catalog_sync.sources.base import CatalogSource
 
 logger = logging.getLogger(__name__)
@@ -13,14 +13,12 @@ BASE_URL = "https://api.confluent.cloud"
 
 # GraphQL query that fetches classification tags and business metadata
 # for all kafka_topic entities in a single call. Paginated with limit/offset.
-_GRAPHQL_TAGS_QUERY = """\
-query($limit: Int!, $offset: Int!) {
-  kafka_topic(limit: $limit, offset: $offset) {
-    qualifiedName
-    tags
-    business_metadata { name value }
-  }
-}"""
+def _graphql_tags_query(limit: int, offset: int) -> str:
+    return (
+        "{ kafka_topic(limit: %d, offset: %d) "
+        "{ qualifiedName tags business_metadata { name value } } }"
+        % (limit, offset)
+    )
 
 _GRAPHQL_PAGE_SIZE = 500
 
@@ -36,13 +34,17 @@ def _parse_graphql_tags(topic: dict) -> dict[str, str]:
 
     for tag_name in topic.get("tags") or []:
         if tag_name:
-            tags[sanitize_tag_key(tag_name)] = "true"
+            key = sanitize_tag_key(tag_name)
+            if key:
+                tags[key] = "true"
 
     for bm in topic.get("business_metadata") or []:
         bm_name = bm.get("name", "")
         bm_value = bm.get("value")
         if bm_name and bm_value is not None:
-            tags[sanitize_tag_key(bm_name)] = str(bm_value)
+            key = sanitize_tag_key(bm_name)
+            if key:
+                tags[key] = str(bm_value)
 
     return tags
 
@@ -73,14 +75,15 @@ class ConfluentCloudSource(CatalogSource):
                 schema_registry_api_secret or "",
             )
 
-    def _fetch_all_topic_tags(self) -> dict[str, dict[str, str]]:
+    def _fetch_all_topic_tags(self) -> dict[str, dict[str, str]] | None:
         """Fetch classification tags and business metadata for all
         kafka_topic entities using the Stream Catalog GraphQL API.
 
         Single paginated query returns both tags and business_metadata
         for every topic, avoiding per-topic REST calls.
 
-        Returns {topic_name: {tag_key: tag_value}}.
+        Returns {topic_name: {tag_key: tag_value}}, or None if the
+        fetch failed (so callers can distinguish "no tags" from "error").
         """
         all_tags: dict[str, dict[str, str]] = {}
         offset = 0
@@ -91,11 +94,9 @@ class ConfluentCloudSource(CatalogSource):
                     f"{self._sr_url}/catalog/graphql",
                     auth=self._sr_auth,
                     json={
-                        "query": _GRAPHQL_TAGS_QUERY,
-                        "variables": {
-                            "limit": _GRAPHQL_PAGE_SIZE,
-                            "offset": offset,
-                        },
+                        "query": _graphql_tags_query(
+                            _GRAPHQL_PAGE_SIZE, offset
+                        ),
                     },
                     timeout=30,
                 )
@@ -107,7 +108,7 @@ class ConfluentCloudSource(CatalogSource):
                         "GraphQL errors fetching tags: %s",
                         body["errors"][0].get("message", ""),
                     )
-                    break
+                    return None
 
                 topics = body.get("data", {}).get("kafka_topic") or []
                 for topic in topics:
@@ -135,17 +136,29 @@ class ConfluentCloudSource(CatalogSource):
                 "Failed to fetch tags via GraphQL",
                 exc_info=True,
             )
+            return None
 
         return all_tags
 
     def list_tables(self) -> list[TableInfo]:
-        # Fetch all tags in one paginated GraphQL query
-        all_topic_tags = self._fetch_all_topic_tags() if self._sync_tags else {}
-        if all_topic_tags:
-            logger.info(
-                "Fetched tags for %d topic(s) via GraphQL",
-                len(all_topic_tags),
-            )
+        # Fetch all tags in one paginated GraphQL query.
+        # If fetch fails, _tag_fetch_failed is set so the engine can skip tag sync.
+        self._tag_fetch_failed = False
+        if self._sync_tags:
+            all_topic_tags_result = self._fetch_all_topic_tags()
+            if all_topic_tags_result is None:
+                self._tag_fetch_failed = True
+                all_topic_tags = {}
+                logger.warning("Tag fetch failed — tags will not be populated on tables")
+            else:
+                all_topic_tags = all_topic_tags_result
+                if all_topic_tags:
+                    logger.info(
+                        "Fetched tags for %d topic(s) via GraphQL",
+                        len(all_topic_tags),
+                    )
+        else:
+            all_topic_tags = {}
 
         tables: list[TableInfo] = []
         url: str | None = (
@@ -181,10 +194,18 @@ class ConfluentCloudSource(CatalogSource):
 
                 # Prefer DELTA if available, otherwise take the first format
                 table_formats = spec.get("table_formats", ["DELTA"])
-                table_format = (
+                raw_format = (
                     "DELTA" if "DELTA" in table_formats
                     else table_formats[0].upper()
                 )
+                try:
+                    table_format = validate_table_format(raw_format)
+                except ValueError:
+                    logger.warning(
+                        "Skipping topic '%s' — unsupported format '%s'",
+                        topic_name, raw_format,
+                    )
+                    continue
 
                 tags = all_topic_tags.get(topic_name, {})
 

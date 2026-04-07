@@ -5,8 +5,7 @@ from unittest.mock import patch, MagicMock
 import pytest
 
 from catalog_sync.models import (
-    TableInfo, ColumnInfo, sanitize_tag_key,
-    MANAGED_TAGS_KEY, TOMBSTONE_VALUE,
+    TableInfo, sanitize_tag_key,
 )
 from catalog_sync.sources.confluent_cloud import ConfluentCloudSource
 from catalog_sync.targets.unity_catalog import UnityCatalogTarget
@@ -101,24 +100,6 @@ def _topic(name, location):
         },
         "status": {"phase": "RUNNING"},
     }
-
-
-def _tags_response(tags):
-    """Mock response for classification tags endpoint."""
-    resp = MagicMock()
-    resp.status_code = 200
-    resp.json.return_value = tags
-    resp.raise_for_status = MagicMock()
-    return resp
-
-
-def _bm_response(business_metadata):
-    """Mock response for business metadata endpoint."""
-    resp = MagicMock()
-    resp.status_code = 200
-    resp.json.return_value = business_metadata
-    resp.raise_for_status = MagicMock()
-    return resp
 
 
 def _graphql_response(topics):
@@ -435,21 +416,18 @@ class TestUCTagSync:
         changes = target.sync_tags(table)
 
         assert changes == 2
-        # Should have called table_tags + ALTER TABLE SET TAGS
         calls = mock_ws.statement_execution.execute_statement.call_args_list
         sqls = [c[1]["statement"] for c in calls]
         assert any("table_tags" in s for s in sqls)
-        alter_sql = [s for s in sqls if "SET TAGS" in s and "SHOW" not in s]
+        alter_sql = [s for s in sqls if "SET TAGS" in s]
         assert len(alter_sql) == 1
         assert "'PII' = 'true'" in alter_sql[0]
         assert "'Sensitive' = 'true'" in alter_sql[0]
-        assert MANAGED_TAGS_KEY in alter_sql[0]
 
     @patch("catalog_sync.targets.unity_catalog.WorkspaceClient")
     def test_no_changes_when_tags_match(self, mock_ws_cls):
         existing = [
             ["PII", "true"],
-            [MANAGED_TAGS_KEY, "PII"],
         ]
         target, mock_ws = _make_target_with_tags(mock_ws_cls, show_tags_data=existing)
 
@@ -462,45 +440,19 @@ class TestUCTagSync:
         changes = target.sync_tags(table)
 
         assert changes == 0
-        # Only table_tags should have been called, no ALTER
         calls = mock_ws.statement_execution.execute_statement.call_args_list
         sqls = [c[1]["statement"] for c in calls]
-        assert not any("ALTER" in s for s in sqls)
-
-    @patch("catalog_sync.targets.unity_catalog.WorkspaceClient")
-    def test_tombstones_removed_tags(self, mock_ws_cls):
-        existing = [
-            ["PII", "true"],
-            ["Sensitive", "true"],
-            [MANAGED_TAGS_KEY, "PII,Sensitive"],
-        ]
-        target, mock_ws = _make_target_with_tags(mock_ws_cls, show_tags_data=existing)
-
-        # Source no longer has Sensitive
-        table = TableInfo(
-            namespace="default", name="orders",
-            location="s3://b/orders",
-            tags={"PII": "true"},
-        )
-
-        changes = target.sync_tags(table)
-
-        assert changes == 1  # Sensitive tombstoned
-        calls = mock_ws.statement_execution.execute_statement.call_args_list
-        alter_sqls = [c[1]["statement"] for c in calls if "ALTER" in c[1]["statement"]]
-        assert len(alter_sqls) == 1
-        assert f"'Sensitive' = '{TOMBSTONE_VALUE}'" in alter_sqls[0]
+        assert not any("SET TAGS" in s for s in sqls)
+        assert not any("UNSET TAGS" in s for s in sqls)
 
     @patch("catalog_sync.targets.unity_catalog.WorkspaceClient")
     def test_preserves_uc_native_tags(self, mock_ws_cls):
         existing = [
-            ["team", "analytics"],  # UC-native, not in managed manifest
+            ["team", "analytics"],
             ["PII", "true"],
-            [MANAGED_TAGS_KEY, "PII"],
         ]
         target, mock_ws = _make_target_with_tags(mock_ws_cls, show_tags_data=existing)
 
-        # Source still has PII, doesn't know about "team"
         table = TableInfo(
             namespace="default", name="orders",
             location="s3://b/orders",
@@ -509,18 +461,16 @@ class TestUCTagSync:
 
         changes = target.sync_tags(table)
 
-        assert changes == 0  # Nothing changed
-        # "team" should NOT be tombstoned
+        assert changes == 0
         calls = mock_ws.statement_execution.execute_statement.call_args_list
         sqls = [c[1]["statement"] for c in calls]
-        for sql in sqls:
-            assert "team" not in sql or "SHOW" in sql
+        assert not any("SET TAGS" in s for s in sqls)
+        assert not any("UNSET TAGS" in s for s in sqls)
 
     @patch("catalog_sync.targets.unity_catalog.WorkspaceClient")
     def test_updates_changed_tag_value(self, mock_ws_cls):
         existing = [
             ["DataOwnership_owner", "old-team"],
-            [MANAGED_TAGS_KEY, "DataOwnership_owner"],
         ]
         target, mock_ws = _make_target_with_tags(mock_ws_cls, show_tags_data=existing)
 
@@ -539,10 +489,8 @@ class TestUCTagSync:
 
     @patch("catalog_sync.targets.unity_catalog.WorkspaceClient")
     def test_same_key_as_uc_tag_overwrites(self, mock_ws_cls):
-        # UC user manually set PII=false, Confluent says PII=true
         existing = [
             ["PII", "false"],
-            # No managed manifest — first sync
         ]
         target, mock_ws = _make_target_with_tags(mock_ws_cls, show_tags_data=existing)
 
@@ -560,15 +508,12 @@ class TestUCTagSync:
         assert "'PII' = 'true'" in alter_sqls[0]
 
     @patch("catalog_sync.targets.unity_catalog.WorkspaceClient")
-    def test_empty_source_tags_tombstones_all_managed(self, mock_ws_cls):
+    def test_empty_source_tags_no_changes(self, mock_ws_cls):
         existing = [
             ["PII", "true"],
-            ["Sensitive", "true"],
-            [MANAGED_TAGS_KEY, "PII,Sensitive"],
         ]
         target, mock_ws = _make_target_with_tags(mock_ws_cls, show_tags_data=existing)
 
-        # Source has no tags anymore
         table = TableInfo(
             namespace="default", name="orders",
             location="s3://b/orders",
@@ -577,48 +522,38 @@ class TestUCTagSync:
 
         changes = target.sync_tags(table)
 
-        assert changes == 2  # Both tombstoned
+        assert changes == 0
+
+    @patch("catalog_sync.targets.unity_catalog.WorkspaceClient")
+    def test_skips_empty_tag_keys(self, mock_ws_cls):
+        target, mock_ws = _make_target_with_tags(mock_ws_cls, show_tags_data=[])
+
+        table = TableInfo(
+            namespace="default", name="orders",
+            location="s3://b/orders",
+            tags={"": "true", "PII": "true"},
+        )
+
+        changes = target.sync_tags(table)
+
+        assert changes == 1
         calls = mock_ws.statement_execution.execute_statement.call_args_list
         alter_sqls = [c[1]["statement"] for c in calls if "ALTER" in c[1]["statement"]]
-        assert f"'PII' = '{TOMBSTONE_VALUE}'" in alter_sqls[0]
-        assert f"'Sensitive' = '{TOMBSTONE_VALUE}'" in alter_sqls[0]
+        assert "'PII' = 'true'" in alter_sqls[0]
+        assert "'' =" not in alter_sqls[0]
 
     @patch("catalog_sync.targets.unity_catalog.WorkspaceClient")
-    def test_already_tombstoned_not_counted_again(self, mock_ws_cls):
-        existing = [
-            ["PII", TOMBSTONE_VALUE],  # Already tombstoned
-            [MANAGED_TAGS_KEY, "PII"],
-        ]
-        target, mock_ws = _make_target_with_tags(mock_ws_cls, show_tags_data=existing)
-
-        table = TableInfo(
-            namespace="default", name="orders",
-            location="s3://b/orders",
-            tags={},
-        )
-
-        changes = target.sync_tags(table)
-
-        assert changes == 0  # Already tombstoned, no new change
-
-    @patch("catalog_sync.targets.unity_catalog.WorkspaceClient")
-    def test_show_tags_failure_returns_zero(self, mock_ws_cls):
+    def test_show_tags_failure_still_applies_tags(self, mock_ws_cls):
         mock_ws = MagicMock()
         mock_ws_cls.return_value = mock_ws
 
-        call_count = 0
-
         def execute_side_effect(**kwargs):
-            nonlocal call_count
-            call_count += 1
             sql = kwargs.get("statement", "")
             result = MagicMock()
             result.status.state.value = "SUCCEEDED"
             result.result = None
 
             if "table_tags" in sql:
-                result.status.state.value = "FAILED"
-                result.status.error.message = "table_tags not supported"
                 raise RuntimeError("SQL execution failed: table_tags not supported")
 
             return result
@@ -638,10 +573,8 @@ class TestUCTagSync:
             tags={"PII": "true"},
         )
 
-        # sync_tags handles the RuntimeError from table_tags
         changes = target.sync_tags(table)
 
-        # Should still apply tags (treats current as empty)
         assert changes == 1
 
 
@@ -751,7 +684,7 @@ class TestEngineTagSync:
         assert result.tags_synced == 0
         assert len(target.tags_synced) == 0
 
-    def test_engine_no_tag_sync_for_new_table_with_no_tags(self):
+    def test_engine_syncs_tags_for_new_table_with_no_tags(self):
         table = TableInfo(
             namespace="default", name="orders",
             location="s3://b/orders",
@@ -764,8 +697,9 @@ class TestEngineTagSync:
         result = engine.sync()
 
         assert result.added == 1
-        # sync_tags not called for new tables with no tags
-        assert len(target.tags_synced) == 0
+        # sync_tags always called for new tables even with empty tags
+        # (handles removal of previously-managed tags)
+        assert len(target.tags_synced) == 1
 
     def test_sync_result_includes_tags_synced(self):
         result = SyncResult(added=1, updated=0, removed=0, tags_synced=3)

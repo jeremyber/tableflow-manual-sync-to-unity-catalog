@@ -15,6 +15,16 @@ def _table(ns="default", name="orders", loc="s3://b/w/default/orders"):
 def _make_target(mock_ws_cls):
     mock_ws = MagicMock()
     mock_ws_cls.return_value = mock_ws
+
+    # Ensure execute_statement returns a result with SUCCEEDED state
+    def _default_execute(**kwargs):
+        result = MagicMock()
+        result.status.state.value = "SUCCEEDED"
+        result.result = None
+        return result
+
+    mock_ws.statement_execution.execute_statement.side_effect = _default_execute
+
     target = UnityCatalogTarget(
         host="https://ws.databricks.com",
         token="dapi123",
@@ -22,6 +32,7 @@ def _make_target(mock_ws_cls):
     )
     # Reset call count after init (CREATE CATALOG + CREATE SCHEMA)
     mock_ws.statement_execution.execute_statement.reset_mock()
+    mock_ws.statement_execution.execute_statement.side_effect = _default_execute
     return target, mock_ws
 
 
@@ -29,6 +40,14 @@ def _make_target(mock_ws_cls):
 def test_init_creates_catalog_and_schema(mock_ws_cls):
     mock_ws = MagicMock()
     mock_ws_cls.return_value = mock_ws
+
+    def _default_execute(**kwargs):
+        result = MagicMock()
+        result.status.state.value = "SUCCEEDED"
+        result.result = None
+        return result
+
+    mock_ws.statement_execution.execute_statement.side_effect = _default_execute
 
     UnityCatalogTarget(
         host="https://ws.databricks.com",
@@ -103,11 +122,19 @@ def test_list_tables_queries_information_schema(mock_ws_cls):
     mock_ws = MagicMock()
     mock_ws_cls.return_value = mock_ws
 
-    mock_result = MagicMock()
-    mock_result.result.data_array = [
-        ["default", "orders", "s3://b/w/default/orders"],
-    ]
-    mock_ws.statement_execution.execute_statement.return_value = mock_result
+    def _execute_side_effect(**kwargs):
+        sql = kwargs.get("statement", "")
+        result = MagicMock()
+        result.status.state.value = "SUCCEEDED"
+        if "information_schema" in sql:
+            result.result.data_array = [
+                ["default", "orders", "s3://b/w/default/orders"],
+            ]
+        else:
+            result.result = None
+        return result
+
+    mock_ws.statement_execution.execute_statement.side_effect = _execute_side_effect
 
     target = UnityCatalogTarget(
         host="https://ws.databricks.com",

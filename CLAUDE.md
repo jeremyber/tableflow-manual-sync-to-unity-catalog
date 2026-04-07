@@ -100,7 +100,7 @@ cd terraform/confluent-cloud && terraform init && terraform validate
 - **Tag destination**: UC table tags via `ALTER TABLE SET TAGS` — immediately available for UC access policies
 - **Tag mapping**: Classification `PII` → `PII=true`. BM `DataOwnership.owner=team` → `DataOwnership_owner=team`. UC-prohibited chars (`. , - = / :`) replaced with `_`
 - **Manifest tracking**: `_confluent_managed_tags` tag stores CSV of managed keys — prevents clobbering UC-native tags
-- **Tombstoning**: Removed tags get value `__tombstone__` (audit trail). Already-tombstoned tags not re-tombstoned
+- **Removal**: Tags removed from Confluent are fully removed from UC via `ALTER TABLE UNSET TAGS`. Managed keys tracked via manifest in Databricks workspace file.
 - **Error isolation**: Tag sync failures per table are logged and skipped, don't block other tables
 - **SR PrivateLink**: If SR PrivateLink is enabled, `SCHEMA_REGISTRY_URL` must be set to the Stream Catalog URL (`STREAM_CATALOG_URL`)
 

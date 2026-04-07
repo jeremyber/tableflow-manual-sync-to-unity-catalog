@@ -27,7 +27,7 @@ class CatalogTarget(ABC):
         """Sync governance tags for a registered table.
 
         Compares source tags with current tags on the target table.
-        Adds new tags, updates changed tags, and tombstones removed tags.
+        Adds new tags, updates changed tags, and removes stale tags.
         Preserves tags not managed by Confluent.
 
         Returns the number of tag changes applied.

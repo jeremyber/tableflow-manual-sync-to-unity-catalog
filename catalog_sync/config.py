@@ -17,6 +17,10 @@ class SyncConfig:
     target_catalog: str
     target_schema: str = "default"
 
+    # Databricks service principal (alternative to token)
+    databricks_client_id: str | None = None
+    databricks_client_secret: str | None = None
+
     # Databricks SQL warehouse
     databricks_warehouse_id: str | None = None
 
@@ -38,7 +42,9 @@ class SyncConfig:
         config = cls(
             source_type=source_type,
             databricks_host=os.environ["DATABRICKS_HOST"],
-            databricks_token=os.environ["DATABRICKS_TOKEN"],
+            databricks_token=os.environ.get("DATABRICKS_TOKEN"),
+            databricks_client_id=os.environ.get("DATABRICKS_CLIENT_ID"),
+            databricks_client_secret=os.environ.get("DATABRICKS_CLIENT_SECRET"),
             target_catalog=os.environ["TARGET_CATALOG"],
             target_schema=os.environ.get("TARGET_SCHEMA", "default"),
             databricks_warehouse_id=os.environ.get("DATABRICKS_WAREHOUSE_ID"),
