@@ -586,12 +586,12 @@ All credentials are transmitted over TLS. For automated deployments, store them 
 
 ## Design Decisions
 
-- **External tables, not foreign catalogs.** Unity Catalog "foreign catalogs" are for RDBMS/JDBC. Tableflow tables use `CREATE EXTERNAL TABLE ... USING DELTA|ICEBERG LOCATION`.
+- **External tables, not foreign catalogs.** Unity Catalog "foreign catalogs" are for RDBMS/JDBC. Tableflow tables use `CREATE EXTERNAL TABLE ... USING DELTA LOCATION`.
 - **Metadata only.** Tables are registered by storage location reference. No data is copied.
 - **Safe to run anytime.** The sync checks each topic's Tableflow `status.phase` — only topics in `RUNNING` state are registered. Topics still materializing are skipped. The Databricks external location is read-only, so even a premature registration can't corrupt the Delta log.
 - **Runs anywhere.** The sync script has no cloud-specific dependencies. Run it on your laptop, a bastion host, Lambda, Azure Functions, or a Kubernetes pod.
 - **BYOB required.** Confluent-Managed Storage (CMS) does not work with private networking. BYOB is the supported path.
-- **Delta and Iceberg.** The engine reads the table format from the Confluent Cloud API and uses `USING DELTA` or `USING ICEBERG` accordingly.
+- **Delta only.** The engine validates that the table format is Delta before registering. Iceberg tables are skipped — UC does not auto-refresh Iceberg metadata from external storage, so registered Iceberg tables would go stale as Tableflow writes new snapshots.
 
 ## Future: Native Sync
 
