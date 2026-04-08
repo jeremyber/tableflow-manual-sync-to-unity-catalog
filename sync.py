@@ -99,7 +99,7 @@ if SYNC_TAGS and not all([SR_URL, SR_API_KEY, SR_API_SECRET]):
 
 _UC_TAG_KEY_INVALID = re.compile(r"[.,\-=/:\s';\(\)`]+")
 _UC_TAG_KEY_VALID = re.compile(r"^[a-zA-Z0-9_]+$")
-_VALID_TABLE_FORMATS = {"DELTA", "ICEBERG"}
+_VALID_TABLE_FORMATS = {"DELTA"}
 
 
 def _sanitize_tag_key(key: str) -> str:

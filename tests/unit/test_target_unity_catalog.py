@@ -77,7 +77,7 @@ def test_register_table_calls_create(mock_ws_cls):
 
 
 @patch("catalog_sync.targets.unity_catalog.WorkspaceClient")
-def test_register_table_uses_iceberg_format(mock_ws_cls):
+def test_register_table_rejects_iceberg_format(mock_ws_cls):
     target, mock_ws = _make_target(mock_ws_cls)
 
     table = TableInfo(
@@ -87,10 +87,9 @@ def test_register_table_uses_iceberg_format(mock_ws_cls):
         columns=[ColumnInfo(name="id", type="long", nullable=False)],
         table_format="ICEBERG",
     )
-    target.register_table(table)
-
-    sql = mock_ws.statement_execution.execute_statement.call_args[1]["statement"]
-    assert "USING ICEBERG" in sql
+    import pytest
+    with pytest.raises(ValueError, match="Unknown table format"):
+        target.register_table(table)
 
 
 @patch("catalog_sync.targets.unity_catalog.WorkspaceClient")

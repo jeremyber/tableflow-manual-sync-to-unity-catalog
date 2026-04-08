@@ -11,7 +11,7 @@ _UC_TAG_KEY_INVALID = re.compile(r"[.,\-=/:\s';\(\)`]+")
 _SAFE_IDENTIFIER = re.compile(r"^[a-zA-Z0-9_\-]+$")
 
 # Allowed table formats for USING clause
-VALID_TABLE_FORMATS = {"DELTA", "ICEBERG"}
+VALID_TABLE_FORMATS = {"DELTA"}
 
 
 def validate_identifier(value: str, label: str = "identifier") -> str:

@@ -54,15 +54,16 @@ def test_list_tables_returns_tableflow_topics(mock_get):
 
 
 @patch("catalog_sync.sources.confluent_cloud.requests.get")
-def test_list_tables_iceberg_format(mock_get):
+def test_list_tables_skips_iceberg_format(mock_get):
     mock_get.return_value = _api_response([
         _topic("events", "s3://bucket/warehouse/events", table_formats=["ICEBERG"]),
+        _topic("orders", "s3://bucket/warehouse/orders", table_formats=["DELTA"]),
     ])
 
     tables = _source().list_tables()
 
     assert len(tables) == 1
-    assert tables[0].table_format == "ICEBERG"
+    assert tables[0].name == "orders"
 
 
 @patch("catalog_sync.sources.confluent_cloud.requests.get")
