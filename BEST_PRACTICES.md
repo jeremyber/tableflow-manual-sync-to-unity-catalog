@@ -13,6 +13,83 @@
 
 **Do not** run `sync.py` with `SYNC_TAGS=true` and `sync_tags.py` against the same tables. Both manage tags with separate manifests and will conflict. Pick one approach for tags.
 
+---
+
+## `sync.py` — Table + Tag Sync
+
+### When to use
+- Private networking (PNI/PrivateLink) where Confluent's native catalog sync can't reach your UC
+- You want a single tool to manage both table registration and tag sync
+
+### Prerequisites
+- Tableflow API key (scoped to `tableflow/v1`)
+- Schema Registry API key (if `SYNC_TAGS=true`)
+- Databricks workspace with UC, SQL warehouse, and a service principal or PAT
+- Storage credential + external location in UC pointing to the BYOB bucket
+
+### Running
+```bash
+# Tables + tags (default)
+python3 sync.py
+
+# Tables only
+SYNC_TAGS=false python3 sync.py
+```
+
+### How it works
+1. Discovers Tableflow-enabled topics via Confluent Cloud API
+2. Registers them as external tables in UC via `CREATE TABLE ... USING DELTA LOCATION`
+3. Fetches tags and business metadata via Stream Catalog GraphQL API
+4. Applies tags to UC tables via `ALTER TABLE SET TAGS`
+5. Removes stale tags via `ALTER TABLE UNSET TAGS`
+
+### Manifest
+Stored in **table properties** (`_confluent_managed_tags` via `SET TBLPROPERTIES`). Per-table, self-contained. Requires write access to the external location — if the location is read-only, use `sync_tags.py` for tags instead.
+
+### Scheduling
+```bash
+*/15 * * * * cd /path/to/repo && python3 sync.py >> /var/log/sync.log 2>&1
+```
+
+For Lambda: the entry point is `catalog_sync.handler.lambda_handler`. See `terraform/demo/` for a working example.
+
+---
+
+## `sync_tags.py` — Tags Only
+
+### When to use
+- Confluent's native catalog sync already handles table creation in UC
+- You only need governance metadata (classification tags + business metadata) on existing UC tables
+- Your external location is read-only (can't use `sync.py` for tags)
+
+### Prerequisites
+- Schema Registry API key
+- Databricks workspace with UC, SQL warehouse, and a service principal or PAT
+- Tables already exist in UC (created by native catalog sync or `sync.py` with `SYNC_TAGS=false`)
+- No Tableflow API key or CC Environment ID needed
+
+### Running
+```bash
+python3 sync_tags.py
+```
+
+### How it works
+1. Lists existing external tables in UC via `information_schema.tables`
+2. Fetches tags and business metadata via Stream Catalog GraphQL API
+3. Compares with current UC tags — adds new, updates changed
+4. Removes stale tags via `ALTER TABLE UNSET TAGS`
+5. Preserves UC-native tags (added directly in Databricks)
+
+### Manifest
+Stored in **Databricks workspace file** (`/Shared/.confluent_tag_manifest.json`). Shared across machines — any compute with the service principal can read/write it. No external location write access needed.
+
+### Scheduling
+```bash
+*/15 * * * * cd /path/to/repo && python3 sync_tags.py >> /var/log/tag-sync.log 2>&1
+```
+
+---
+
 ## Tag Mapping Reference
 
 | Confluent Source | UC Tag Key | UC Tag Value |
