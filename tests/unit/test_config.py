@@ -12,6 +12,7 @@ def test_config_from_env(monkeypatch):
     monkeypatch.setenv("DATABRICKS_TOKEN", "dapi123")
     monkeypatch.setenv("TARGET_CATALOG", "tableflow_catalog")
     monkeypatch.setenv("TARGET_SCHEMA", "default")
+    monkeypatch.setenv("SYNC_TAGS", "false")
 
     config = SyncConfig.from_env()
 
@@ -45,6 +46,7 @@ def test_config_confluent_api_from_env(monkeypatch):
     monkeypatch.setenv("DATABRICKS_HOST", "https://ws.databricks.com")
     monkeypatch.setenv("DATABRICKS_TOKEN", "dapi123")
     monkeypatch.setenv("TARGET_CATALOG", "tf_catalog")
+    monkeypatch.setenv("SYNC_TAGS", "false")
 
     config = SyncConfig.from_env()
 

@@ -21,5 +21,8 @@ def test_concrete_target_can_instantiate():
         def remove_table(self, namespace: str, name: str) -> None:
             pass
 
+        def sync_tags(self, table) -> int:
+            return 0
+
     target = ConcreteTarget()
     assert target.list_tables() == []

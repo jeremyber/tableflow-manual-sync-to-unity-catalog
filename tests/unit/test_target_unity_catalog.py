@@ -1,4 +1,5 @@
 from unittest.mock import MagicMock, patch
+import pytest
 from catalog_sync.models import ColumnInfo, TableInfo
 from catalog_sync.targets.unity_catalog import UnityCatalogTarget
 
@@ -15,6 +16,16 @@ def _table(ns="default", name="orders", loc="s3://b/w/default/orders"):
 def _make_target(mock_ws_cls):
     mock_ws = MagicMock()
     mock_ws_cls.return_value = mock_ws
+
+    # Ensure execute_statement returns a result with SUCCEEDED state
+    def _default_execute(**kwargs):
+        result = MagicMock()
+        result.status.state.value = "SUCCEEDED"
+        result.result = None
+        return result
+
+    mock_ws.statement_execution.execute_statement.side_effect = _default_execute
+
     target = UnityCatalogTarget(
         host="https://ws.databricks.com",
         token="dapi123",
@@ -22,6 +33,7 @@ def _make_target(mock_ws_cls):
     )
     # Reset call count after init (CREATE CATALOG + CREATE SCHEMA)
     mock_ws.statement_execution.execute_statement.reset_mock()
+    mock_ws.statement_execution.execute_statement.side_effect = _default_execute
     return target, mock_ws
 
 
@@ -29,6 +41,14 @@ def _make_target(mock_ws_cls):
 def test_init_creates_catalog_and_schema(mock_ws_cls):
     mock_ws = MagicMock()
     mock_ws_cls.return_value = mock_ws
+
+    def _default_execute(**kwargs):
+        result = MagicMock()
+        result.status.state.value = "SUCCEEDED"
+        result.result = None
+        return result
+
+    mock_ws.statement_execution.execute_statement.side_effect = _default_execute
 
     UnityCatalogTarget(
         host="https://ws.databricks.com",
@@ -58,7 +78,7 @@ def test_register_table_calls_create(mock_ws_cls):
 
 
 @patch("catalog_sync.targets.unity_catalog.WorkspaceClient")
-def test_register_table_uses_iceberg_format(mock_ws_cls):
+def test_register_table_rejects_iceberg_format(mock_ws_cls):
     target, mock_ws = _make_target(mock_ws_cls)
 
     table = TableInfo(
@@ -68,10 +88,8 @@ def test_register_table_uses_iceberg_format(mock_ws_cls):
         columns=[ColumnInfo(name="id", type="long", nullable=False)],
         table_format="ICEBERG",
     )
-    target.register_table(table)
-
-    sql = mock_ws.statement_execution.execute_statement.call_args[1]["statement"]
-    assert "USING ICEBERG" in sql
+    with pytest.raises(ValueError, match="Unknown table format"):
+        target.register_table(table)
 
 
 @patch("catalog_sync.targets.unity_catalog.WorkspaceClient")
@@ -103,11 +121,19 @@ def test_list_tables_queries_information_schema(mock_ws_cls):
     mock_ws = MagicMock()
     mock_ws_cls.return_value = mock_ws
 
-    mock_result = MagicMock()
-    mock_result.result.data_array = [
-        ["default", "orders", "s3://b/w/default/orders"],
-    ]
-    mock_ws.statement_execution.execute_statement.return_value = mock_result
+    def _execute_side_effect(**kwargs):
+        sql = kwargs.get("statement", "")
+        result = MagicMock()
+        result.status.state.value = "SUCCEEDED"
+        if "information_schema" in sql:
+            result.result.data_array = [
+                ["default", "orders", "s3://b/w/default/orders"],
+            ]
+        else:
+            result.result = None
+        return result
+
+    mock_ws.statement_execution.execute_statement.side_effect = _execute_side_effect
 
     target = UnityCatalogTarget(
         host="https://ws.databricks.com",

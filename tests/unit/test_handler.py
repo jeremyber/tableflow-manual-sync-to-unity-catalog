@@ -14,6 +14,7 @@ def _config(**overrides):
         confluent_api_secret="secret",
         confluent_cluster_id="lkc-abc",
         confluent_environment_id="env-xyz",
+        sync_tags=False,
     )
     defaults.update(overrides)
     return SyncConfig(**defaults)
@@ -26,7 +27,9 @@ def _config(**overrides):
 def test_lambda_handler_runs_sync(mock_engine_cls, mock_build_target, mock_build_source, mock_from_env):
     mock_from_env.return_value = _config()
     mock_engine = MagicMock()
-    mock_engine.sync.return_value = MagicMock(added=1, updated=0, removed=0, total_changes=1)
+    mock_engine.sync.return_value = MagicMock(
+        added=1, updated=0, removed=0, tags_synced=0, total_changes=1,
+    )
     mock_engine_cls.return_value = mock_engine
 
     result = lambda_handler({}, None)
@@ -46,6 +49,10 @@ def test_build_source_confluent_api():
             cluster_id="lkc-abc",
             environment_id="env-xyz",
             namespace="default",
+            schema_registry_url=None,
+            schema_registry_api_key=None,
+            schema_registry_api_secret=None,
+            sync_tags=False,
         )
 
 
@@ -59,4 +66,6 @@ def test_build_target():
             catalog_name="tf_catalog",
             warehouse_id=None,
             schema_name="default",
+            client_id=None,
+            client_secret=None,
         )

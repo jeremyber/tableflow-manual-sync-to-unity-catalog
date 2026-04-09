@@ -31,6 +31,9 @@ class FakeTarget(CatalogTarget):
     def remove_table(self, namespace: str, name: str) -> None:
         self.removed.append(f"{namespace}.{name}")
 
+    def sync_tags(self, table: TableInfo) -> int:
+        return 0
+
 
 def _table(ns: str, name: str, loc: str = "s3://b/w", cols: list | None = None) -> TableInfo:
     return TableInfo(

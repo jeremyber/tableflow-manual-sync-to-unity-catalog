@@ -21,3 +21,14 @@ class CatalogTarget(ABC):
     @abstractmethod
     def remove_table(self, namespace: str, name: str) -> None:
         """Remove a table registration."""
+
+    @abstractmethod
+    def sync_tags(self, table: TableInfo) -> int:
+        """Sync governance tags for a registered table.
+
+        Compares source tags with current tags on the target table.
+        Adds new tags, updates changed tags, and removes stale tags.
+        Preserves tags not managed by Confluent.
+
+        Returns the number of tag changes applied.
+        """
