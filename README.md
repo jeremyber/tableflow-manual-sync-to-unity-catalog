@@ -290,24 +290,25 @@ Tags are fetched from the [Stream Catalog GraphQL API](https://docs.confluent.io
 - Tags removed from Confluent are fully removed from UC via `ALTER TABLE UNSET TAGS`
 - Tag sync failures don't block table sync
 
-### Two modes of operation
+### Which mode to use
 
-**Mode 1: Tables + tags** — `python sync.py`
-Discovers Tableflow topics, registers tables in UC, and syncs governance tags. Use this when you manage everything via this tool.
+1. **Already using Confluent's native Tableflow catalog sync?** Use `sync_tags.py` — it syncs tags to tables that are already in Unity Catalog. No Tableflow API key needed.
 
-**Mode 2: Tables only** — `SYNC_TAGS=false python sync.py`
-Same as Mode 1 but skips tag sync. No Schema Registry credentials needed.
+2. **Want this tool to sync both tables and tags?** Use `sync.py` with `SYNC_TAGS=true` (the default) — handles everything in one pass.
 
-**Mode 3: Tags only** — `python sync_tags.py`
-Syncs tags to tables that already exist in Unity Catalog. Use this when Confluent Cloud's native catalog sync handles table creation and you only need governance metadata.
+3. **Only need table sync, no tags?** Use `sync.py` with `SYNC_TAGS=false` — no Schema Registry credentials needed.
 
-| | Mode 1: `sync.py` | Mode 2: `SYNC_TAGS=false sync.py` | Mode 3: `sync_tags.py` |
+> **Important:** Do not run `sync.py` with `SYNC_TAGS=true` and `sync_tags.py` against the same tables. Both manage tags with separate manifests and will conflict. Pick one approach for tags.
+
+| | `sync.py` | `SYNC_TAGS=false sync.py` | `sync_tags.py` |
 |---|---|---|---|
 | Creates/updates tables | Yes | Yes | No |
 | Syncs governance tags | Yes | No | Yes |
 | Needs Tableflow API key | Yes | Yes | No |
 | Needs SR credentials | Yes | No | Yes |
 | Needs CC Environment ID | Yes | Yes | No |
+
+See [BEST_PRACTICES.md](BEST_PRACTICES.md) for deployment patterns, multi-cluster setups, and operational guidance.
 
 ### Tag sync configuration
 
