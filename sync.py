@@ -68,6 +68,18 @@ if _env_file.is_file():
 
 # ── Config ──────────────────────────────────────────────────
 
+_REQUIRED_VARS = [
+    "CONFLUENT_API_KEY", "CONFLUENT_API_SECRET",
+    "CONFLUENT_CLUSTER_ID", "CONFLUENT_ENVIRONMENT_ID",
+    "DATABRICKS_HOST", "DATABRICKS_WAREHOUSE_ID", "TARGET_CATALOG",
+]
+_missing = [v for v in _REQUIRED_VARS if not os.environ.get(v)]
+if _missing:
+    print(f"Error: missing required environment variables: {', '.join(_missing)}")
+    print(f"Set them in .env.sync or export them directly.")
+    print(f"See README.md for the full list of required variables.")
+    raise SystemExit(1)
+
 CONFLUENT_API_KEY    = os.environ["CONFLUENT_API_KEY"]
 CONFLUENT_API_SECRET = os.environ["CONFLUENT_API_SECRET"]
 CLUSTER_ID           = os.environ["CONFLUENT_CLUSTER_ID"]
@@ -261,10 +273,8 @@ if DATABRICKS_CLIENT_ID and DATABRICKS_CLIENT_SECRET:
 elif DATABRICKS_TOKEN:
     ws = WorkspaceClient(host=DATABRICKS_HOST, token=DATABRICKS_TOKEN)
 else:
-    raise ValueError(
-        "Set either DATABRICKS_TOKEN or both DATABRICKS_CLIENT_ID "
-        "and DATABRICKS_CLIENT_SECRET"
-    )
+    print("Error: set either DATABRICKS_TOKEN or both DATABRICKS_CLIENT_ID and DATABRICKS_CLIENT_SECRET")
+    raise SystemExit(1)
 
 def run_sql(sql):
     """Execute a SQL statement on the Databricks warehouse."""

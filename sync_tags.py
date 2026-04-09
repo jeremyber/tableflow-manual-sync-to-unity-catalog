@@ -53,6 +53,18 @@ if _env_file.is_file():
 
 # ── Config ──────────────────────────────────────────────────
 
+_REQUIRED_VARS = [
+    "CONFLUENT_CLUSTER_ID",
+    "SCHEMA_REGISTRY_URL", "SCHEMA_REGISTRY_API_KEY", "SCHEMA_REGISTRY_API_SECRET",
+    "DATABRICKS_HOST", "DATABRICKS_WAREHOUSE_ID", "TARGET_CATALOG",
+]
+_missing = [v for v in _REQUIRED_VARS if not os.environ.get(v)]
+if _missing:
+    print(f"Error: missing required environment variables: {', '.join(_missing)}")
+    print(f"Set them in .env.sync or export them directly.")
+    print(f"See README.md for the full list of required variables.")
+    raise SystemExit(1)
+
 CLUSTER_ID           = os.environ["CONFLUENT_CLUSTER_ID"]
 SR_URL               = os.environ["SCHEMA_REGISTRY_URL"].rstrip("/")
 SR_API_KEY           = os.environ["SCHEMA_REGISTRY_API_KEY"]
@@ -109,10 +121,8 @@ if DATABRICKS_CLIENT_ID and DATABRICKS_CLIENT_SECRET:
 elif DATABRICKS_TOKEN:
     ws = WorkspaceClient(host=DATABRICKS_HOST, token=DATABRICKS_TOKEN)
 else:
-    raise ValueError(
-        "Set either DATABRICKS_TOKEN or both DATABRICKS_CLIENT_ID "
-        "and DATABRICKS_CLIENT_SECRET"
-    )
+    print("Error: set either DATABRICKS_TOKEN or both DATABRICKS_CLIENT_ID and DATABRICKS_CLIENT_SECRET")
+    raise SystemExit(1)
 
 
 def _read_manifest() -> dict[str, list[str]]:
