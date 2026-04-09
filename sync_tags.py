@@ -410,11 +410,15 @@ for name in sorted(table_names):
             else:
                 print(f"  {name}: failed to remove tags: {e}")
 
-    # Only update manifest if tag operations succeeded
-    new_managed = sorted(k for k in topic_tags.keys() if k)
+    # Update manifest — preserve failed-to-unset keys so they're retried next run
+    new_managed_set = {k for k in topic_tags.keys() if k}
+    if not unset_ok:
+        new_managed_set |= tags_to_remove
+    if not set_ok:
+        new_managed_set = previously_managed
+    new_managed = sorted(new_managed_set)
     manifest_changed = sorted(previously_managed) != new_managed if previously_managed else bool(new_managed)
-    if set_ok and unset_ok:
-        manifest[name] = new_managed
+    manifest[name] = new_managed
 
     if table_changes:
         added = len(tags_to_set)

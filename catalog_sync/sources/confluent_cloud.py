@@ -44,6 +44,11 @@ def _parse_graphql_tags(topic: dict) -> dict[str, str]:
         if bm_name and bm_value is not None:
             key = sanitize_tag_key(bm_name)
             if key:
+                if key in tags:
+                    logger.warning(
+                        "Tag key collision: BM key '%s' overwrites classification tag '%s'",
+                        bm_name, key,
+                    )
                 tags[key] = str(bm_value)
 
     return tags
@@ -193,7 +198,7 @@ class ConfluentCloudSource(CatalogSource):
                     continue
 
                 # Prefer DELTA if available, otherwise take the first format
-                table_formats = spec.get("table_formats", ["DELTA"])
+                table_formats = spec.get("table_formats") or ["DELTA"]
                 raw_format = (
                     "DELTA" if "DELTA" in table_formats
                     else table_formats[0].upper()

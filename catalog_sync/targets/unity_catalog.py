@@ -7,6 +7,7 @@ from databricks.sdk import WorkspaceClient
 from databricks.sdk.service.sql import Disposition, Format
 
 from catalog_sync.models import TableInfo, validate_identifier, validate_table_format
+from catalog_sync.targets.base import CatalogTarget
 
 # Allowed column types for Unity Catalog
 _VALID_COLUMN_TYPES = {
@@ -14,7 +15,6 @@ _VALID_COLUMN_TYPES = {
     "BOOLEAN", "DATE", "TIMESTAMP", "BINARY", "DECIMAL",
     "ARRAY", "MAP", "STRUCT",
 }
-from catalog_sync.targets.base import CatalogTarget
 
 logger = logging.getLogger(__name__)
 
@@ -249,16 +249,30 @@ class UnityCatalogTarget(CatalogTarget):
                 tags_to_remove.add(key)
                 changes += 1
 
+        set_ok = True
         if tags_to_set:
             logger.info("Setting %d tag(s) for %s.%s", len(tags_to_set), table.namespace, table.name)
-            self._set_tags(table.namespace, table.name, tags_to_set)
+            try:
+                self._set_tags(table.namespace, table.name, tags_to_set)
+            except RuntimeError:
+                set_ok = False
+                logger.warning("Failed to set tags for %s.%s", table.namespace, table.name, exc_info=True)
 
+        unset_ok = True
         if tags_to_remove:
             logger.info("Removing %d stale tag(s) for %s.%s", len(tags_to_remove), table.namespace, table.name)
-            self._unset_tags(table.namespace, table.name, tags_to_remove)
+            try:
+                self._unset_tags(table.namespace, table.name, tags_to_remove)
+            except RuntimeError:
+                unset_ok = False
+                logger.warning("Failed to unset tags for %s.%s", table.namespace, table.name, exc_info=True)
 
-        # Update manifest
+        # Update manifest — preserve failed-to-unset keys so they're retried
         new_managed = {k for k in source_tags.keys() if k}
+        if not unset_ok:
+            new_managed |= tags_to_remove
+        if not set_ok:
+            new_managed = previously_managed
         if new_managed != previously_managed:
             self._write_managed_keys(table.namespace, table.name, new_managed)
 

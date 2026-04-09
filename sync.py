@@ -161,6 +161,10 @@ while url:
         if not location:
             continue
 
+        if not re.match(r"^(s3|s3a|abfss|gs)://", location):
+            print(f"  Skipping topic with invalid storage location: {location!r}")
+            continue
+
         name = spec.get("display_name", "")
 
         try:
@@ -178,7 +182,7 @@ while url:
             print(f"  Skipping '{name}' — Tableflow phase is '{phase}', not RUNNING")
             continue
 
-        formats = spec.get("table_formats", ["DELTA"])
+        formats = spec.get("table_formats") or ["DELTA"]
         fmt = "DELTA" if "DELTA" in formats else formats[0].upper()
         if fmt not in _VALID_TABLE_FORMATS:
             print(f"  Skipping '{name}' — unsupported format '{fmt}'")
@@ -504,9 +508,13 @@ if SYNC_TAGS and not _tag_fetch_failed:
                 unset_ok = False
                 print(f"  {name}: failed to remove tags: {e}")
 
-        # Only update manifest if tag operations succeeded
+        # Update manifest — preserve failed-to-unset keys so they're retried
         new_managed = {k for k in topic_tags.keys() if k}
-        if set_ok and unset_ok and new_managed != previously_managed:
+        if not unset_ok:
+            new_managed |= tags_to_remove
+        if not set_ok:
+            new_managed = previously_managed
+        if new_managed != previously_managed:
             manifest_val = ",".join(sorted(new_managed)).replace("'", "''")
             try:
                 run_sql(f"ALTER TABLE {ftn} SET TBLPROPERTIES ('{_MANAGED_KEYS_PROP}' = '{manifest_val}')")

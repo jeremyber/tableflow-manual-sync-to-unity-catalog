@@ -1,4 +1,5 @@
 from unittest.mock import MagicMock, patch
+import pytest
 from catalog_sync.models import ColumnInfo, TableInfo
 from catalog_sync.targets.unity_catalog import UnityCatalogTarget
 
@@ -87,7 +88,6 @@ def test_register_table_rejects_iceberg_format(mock_ws_cls):
         columns=[ColumnInfo(name="id", type="long", nullable=False)],
         table_format="ICEBERG",
     )
-    import pytest
     with pytest.raises(ValueError, match="Unknown table format"):
         target.register_table(table)
 
