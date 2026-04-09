@@ -29,7 +29,6 @@ import json
 import logging
 import os
 import re
-import sys
 from pathlib import Path
 import requests
 import databricks.sdk.errors
@@ -139,7 +138,7 @@ def _read_manifest() -> dict[str, list[str]]:
 
 def _write_manifest(manifest: dict[str, list[str]]) -> None:
     """Write the tag manifest to Databricks workspace."""
-    from databricks.sdk.service.workspace import ImportFormat, Language
+    from databricks.sdk.service.workspace import ImportFormat
     data = json.dumps(manifest, indent=2, sort_keys=True)
     b64 = base64.b64encode(data.encode()).decode()
     try:
@@ -277,7 +276,7 @@ try:
             _tag_fetch_failed = True
             break
 
-        topics = body.get("data", {}).get("kafka_topic") or []
+        topics = (body.get("data") or {}).get("kafka_topic") or []
         for topic in topics:
             qualified_name = topic.get("qualifiedName", "")
             parts = qualified_name.split(":")
@@ -331,7 +330,7 @@ for name in table_names:
 
 if _tag_fetch_failed:
     print("\nSkipping tag sync — tag fetch failed (see warnings above).")
-    sys.exit(1)
+    raise SystemExit(1)
 
 manifest = _read_manifest()
 tags_changed = 0
@@ -377,6 +376,7 @@ for name in sorted(table_names):
             table_changes += 1
 
     # Apply tag additions/updates
+    set_ok = True
     if tags_to_set:
         tag_pairs = ", ".join(
             f"'{k.replace(chr(39), chr(39)+chr(39))}' = "
@@ -386,6 +386,7 @@ for name in sorted(table_names):
         try:
             run_sql(f"ALTER TABLE {ftn} SET TAGS ({tag_pairs})")
         except RuntimeError as e:
+            set_ok = False
             err = str(e)
             if "PERMISSION_DENIED" in err:
                 print(f"  {name}: missing APPLY TAG permission — run: GRANT APPLY TAG ON CATALOG `{CATALOG}` TO <principal>")
@@ -393,6 +394,7 @@ for name in sorted(table_names):
                 print(f"  {name}: failed to set tags: {e}")
 
     # Remove stale tags
+    unset_ok = True
     if tags_to_remove:
         key_list = ", ".join(
             f"'{k.replace(chr(39), chr(39)+chr(39))}'"
@@ -401,16 +403,18 @@ for name in sorted(table_names):
         try:
             run_sql(f"ALTER TABLE {ftn} UNSET TAGS ({key_list})")
         except RuntimeError as e:
+            unset_ok = False
             err = str(e)
             if "PERMISSION_DENIED" in err:
                 print(f"  {name}: missing APPLY TAG permission — run: GRANT APPLY TAG ON CATALOG `{CATALOG}` TO <principal>")
             else:
                 print(f"  {name}: failed to remove tags: {e}")
 
-    # Update manifest
+    # Only update manifest if tag operations succeeded
     new_managed = sorted(k for k in topic_tags.keys() if k)
     manifest_changed = sorted(previously_managed) != new_managed if previously_managed else bool(new_managed)
-    manifest[name] = new_managed
+    if set_ok and unset_ok:
+        manifest[name] = new_managed
 
     if table_changes:
         added = len(tags_to_set)

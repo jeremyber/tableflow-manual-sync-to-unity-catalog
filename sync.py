@@ -33,6 +33,7 @@ import os
 import re
 from pathlib import Path
 import requests
+import databricks.sdk.errors
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.service.sql import Disposition, Format
 
@@ -242,7 +243,7 @@ if SYNC_TAGS:
                 _tag_fetch_failed = True
                 break
 
-            topics = body.get("data", {}).get("kafka_topic") or []
+            topics = (body.get("data") or {}).get("kafka_topic") or []
             for topic in topics:
                 qualified_name = topic.get("qualifiedName", "")
                 parts = qualified_name.split(":")
@@ -317,18 +318,15 @@ def run_sql(sql):
             disposition=Disposition.INLINE,
             format=Format.JSON_ARRAY,
         )
-    except Exception as e:
-        err = str(e)
-        if "NotFound" in type(e).__name__:
-            print(f"Error: SQL warehouse '{WAREHOUSE_ID}' not found — check DATABRICKS_WAREHOUSE_ID")
-            raise SystemExit(1)
-        if "Unauthorized" in type(e).__name__:
-            print("Error: Databricks authentication failed — check DATABRICKS_TOKEN or CLIENT_ID/SECRET")
-            raise SystemExit(1)
-        if "Forbidden" in type(e).__name__:
-            print("Error: Databricks permission denied — ensure the service principal has CAN USE on the SQL warehouse")
-            raise SystemExit(1)
-        raise
+    except databricks.sdk.errors.NotFound:
+        print(f"Error: SQL warehouse '{WAREHOUSE_ID}' not found — check DATABRICKS_WAREHOUSE_ID")
+        raise SystemExit(1)
+    except databricks.sdk.errors.Unauthorized:
+        print("Error: Databricks authentication failed — check DATABRICKS_TOKEN or CLIENT_ID/SECRET")
+        raise SystemExit(1)
+    except databricks.sdk.errors.Forbidden:
+        print("Error: Databricks permission denied — ensure the service principal has CAN USE on the SQL warehouse")
+        raise SystemExit(1)
     if result.status and result.status.state:
         state = result.status.state.value
         if state == "FAILED":
@@ -350,11 +348,13 @@ run_sql(f"CREATE SCHEMA IF NOT EXISTS `{CATALOG}`.`{SCHEMA}`")
 # We store the S3 location in the table COMMENT so we can
 # detect changes on subsequent runs.
 
-print(f"\nListing existing tables in {CATALOG}...")
+escaped_schema = SCHEMA.replace("'", "''")
+print(f"\nListing existing tables in {CATALOG}.{SCHEMA}...")
 result = run_sql(
     f"SELECT table_schema, table_name, comment "
     f"FROM `{CATALOG}`.information_schema.tables "
-    f"WHERE table_type = 'EXTERNAL'"
+    f"WHERE table_schema = '{escaped_schema}' "
+    f"AND table_type = 'EXTERNAL'"
 )
 
 target_tables = {}  # name -> location
@@ -479,6 +479,7 @@ if SYNC_TAGS and not _tag_fetch_failed:
                 tags_to_remove.add(key)
                 table_changes += 1
 
+        set_ok = True
         if tags_to_set:
             tag_pairs = ", ".join(
                 f"'{k.replace(chr(39), chr(39)+chr(39))}' = "
@@ -488,8 +489,10 @@ if SYNC_TAGS and not _tag_fetch_failed:
             try:
                 run_sql(f"ALTER TABLE {ftn} SET TAGS ({tag_pairs})")
             except RuntimeError as e:
+                set_ok = False
                 print(f"  {name}: failed to set tags: {e}")
 
+        unset_ok = True
         if tags_to_remove:
             key_list = ", ".join(
                 f"'{k.replace(chr(39), chr(39)+chr(39))}'"
@@ -498,11 +501,12 @@ if SYNC_TAGS and not _tag_fetch_failed:
             try:
                 run_sql(f"ALTER TABLE {ftn} UNSET TAGS ({key_list})")
             except RuntimeError as e:
+                unset_ok = False
                 print(f"  {name}: failed to remove tags: {e}")
 
-        # Update manifest in table properties
+        # Only update manifest if tag operations succeeded
         new_managed = {k for k in topic_tags.keys() if k}
-        if new_managed != previously_managed:
+        if set_ok and unset_ok and new_managed != previously_managed:
             manifest_val = ",".join(sorted(new_managed)).replace("'", "''")
             try:
                 run_sql(f"ALTER TABLE {ftn} SET TBLPROPERTIES ('{_MANAGED_KEYS_PROP}' = '{manifest_val}')")

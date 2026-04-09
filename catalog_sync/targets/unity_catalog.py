@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import logging
+import re
 
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.service.sql import Disposition, Format
 
-from catalog_sync.models import ColumnInfo, TableInfo, validate_identifier, validate_table_format
+from catalog_sync.models import TableInfo, validate_identifier, validate_table_format
 
 # Allowed column types for Unity Catalog
 _VALID_COLUMN_TYPES = {
@@ -71,10 +72,12 @@ class UnityCatalogTarget(CatalogTarget):
         return f"`{self._catalog_name}`.`{namespace}`.`{name}`"
 
     def list_tables(self) -> list[TableInfo]:
+        escaped_schema = self._schema_name.replace("'", "''")
         sql = (
             f"SELECT table_schema, table_name, comment "
             f"FROM `{self._catalog_name}`.information_schema.tables "
-            f"WHERE table_type = 'EXTERNAL'"
+            f"WHERE table_schema = '{escaped_schema}' "
+            f"AND table_type = 'EXTERNAL'"
         )
         result = self._execute(sql)
 
@@ -90,7 +93,16 @@ class UnityCatalogTarget(CatalogTarget):
 
         return tables
 
+    @staticmethod
+    def _validate_location(location: str) -> None:
+        if not re.match(r"^(s3|s3a|abfss|gs)://", location):
+            raise ValueError(
+                f"Invalid storage location: {location!r} "
+                f"— expected s3://, abfss://, or gs:// URI"
+            )
+
     def register_table(self, table: TableInfo) -> None:
+        self._validate_location(table.location)
         columns_part = ""
         if table.columns:
             for c in table.columns:

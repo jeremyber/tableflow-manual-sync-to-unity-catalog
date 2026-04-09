@@ -110,7 +110,7 @@ class ConfluentCloudSource(CatalogSource):
                     )
                     return None
 
-                topics = body.get("data", {}).get("kafka_topic") or []
+                topics = (body.get("data") or {}).get("kafka_topic") or []
                 for topic in topics:
                     qualified_name = topic.get("qualifiedName", "")
                     parts = qualified_name.split(":")
