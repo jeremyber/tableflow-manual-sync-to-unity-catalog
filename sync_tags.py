@@ -168,17 +168,30 @@ def _write_manifest(manifest: dict[str, list[str]]) -> None:
 def run_sql(sql):
     """Execute a SQL statement on the Databricks warehouse."""
     print(f"  SQL: {sql[:120]}{'...' if len(sql) > 120 else ''}")
-    result = ws.statement_execution.execute_statement(
-        warehouse_id=WAREHOUSE_ID,
-        statement=sql,
-        wait_timeout="30s",
-        disposition=Disposition.INLINE,
-        format=Format.JSON_ARRAY,
-    )
+    try:
+        result = ws.statement_execution.execute_statement(
+            warehouse_id=WAREHOUSE_ID,
+            statement=sql,
+            wait_timeout="30s",
+            disposition=Disposition.INLINE,
+            format=Format.JSON_ARRAY,
+        )
+    except databricks.sdk.errors.NotFound:
+        print(f"Error: SQL warehouse '{WAREHOUSE_ID}' not found — check DATABRICKS_WAREHOUSE_ID")
+        raise SystemExit(1)
+    except databricks.sdk.errors.Unauthorized:
+        print("Error: Databricks authentication failed — check DATABRICKS_TOKEN or CLIENT_ID/SECRET")
+        raise SystemExit(1)
+    except databricks.sdk.errors.Forbidden:
+        print("Error: Databricks permission denied — ensure the service principal has CAN USE on the SQL warehouse")
+        raise SystemExit(1)
     if result.status and result.status.state:
         state = result.status.state.value
         if state == "FAILED":
             error = result.status.error.message if result.status.error else "Unknown"
+            if "PERMISSION_DENIED" in error and "APPLY TAG" in error.upper():
+                print(f"Error: missing APPLY TAG permission — run: GRANT APPLY TAG ON CATALOG `{CATALOG}` TO <principal>")
+                raise SystemExit(1)
             raise RuntimeError(f"SQL failed: {error}")
         if state != "SUCCEEDED":
             raise RuntimeError(f"SQL did not complete (state={state})")
@@ -186,12 +199,20 @@ def run_sql(sql):
 
 
 print(f"Listing tables in {CATALOG}.{SCHEMA}...")
-result = run_sql(
-    f"SELECT table_name "
-    f"FROM `{CATALOG}`.information_schema.tables "
-    f"WHERE table_schema = '{SCHEMA.replace(chr(39), chr(39)+chr(39))}' "
-    f"AND table_type = 'EXTERNAL'"
-)
+try:
+    result = run_sql(
+        f"SELECT table_name "
+        f"FROM `{CATALOG}`.information_schema.tables "
+        f"WHERE table_schema = '{SCHEMA.replace(chr(39), chr(39)+chr(39))}' "
+        f"AND table_type = 'EXTERNAL'"
+    )
+except RuntimeError as e:
+    if "USE_CATALOG" in str(e) or "USE_SCHEMA" in str(e):
+        print(f"Error: missing catalog/schema permissions — run:")
+        print(f"  GRANT USE CATALOG ON CATALOG `{CATALOG}` TO <principal>;")
+        print(f"  GRANT USE SCHEMA ON SCHEMA `{CATALOG}`.`{SCHEMA}` TO <principal>;")
+        raise SystemExit(1)
+    raise
 
 table_names: list[str] = []
 if result.result and result.result.data_array:
@@ -225,12 +246,29 @@ try:
             "{ qualifiedName tags business_metadata { name value } } }"
             % (_GRAPHQL_PAGE_SIZE, offset)
         )
-        resp = requests.post(
-            f"{SR_URL}/catalog/graphql",
-            auth=sr_auth,
-            json={"query": query},
-            timeout=30,
-        )
+        try:
+            resp = requests.post(
+                f"{SR_URL}/catalog/graphql",
+                auth=sr_auth,
+                json={"query": query},
+                timeout=30,
+            )
+        except requests.ConnectionError:
+            print(f"  Error: could not reach {SR_URL} — check SCHEMA_REGISTRY_URL and network connectivity")
+            _tag_fetch_failed = True
+            break
+        except requests.Timeout:
+            print(f"  Error: request to {SR_URL} timed out")
+            _tag_fetch_failed = True
+            break
+        if resp.status_code == 401:
+            print("  Error: Schema Registry authentication failed — check SCHEMA_REGISTRY_API_KEY/SECRET")
+            _tag_fetch_failed = True
+            break
+        if resp.status_code == 403:
+            print("  Error: Schema Registry access denied — check API key permissions")
+            _tag_fetch_failed = True
+            break
         resp.raise_for_status()
         body = resp.json()
 
@@ -277,7 +315,7 @@ try:
         offset += _GRAPHQL_PAGE_SIZE
 
 except requests.RequestException as e:
-    print(f"  ERROR: failed to fetch tags via GraphQL: {e}")
+    print(f"  Error: failed to fetch tags — {e}")
     _tag_fetch_failed = True
 
 for name in table_names:
@@ -348,7 +386,11 @@ for name in sorted(table_names):
         try:
             run_sql(f"ALTER TABLE {ftn} SET TAGS ({tag_pairs})")
         except RuntimeError as e:
-            print(f"  {name}: failed to set tags: {e}")
+            err = str(e)
+            if "PERMISSION_DENIED" in err:
+                print(f"  {name}: missing APPLY TAG permission — run: GRANT APPLY TAG ON CATALOG `{CATALOG}` TO <principal>")
+            else:
+                print(f"  {name}: failed to set tags: {e}")
 
     # Remove stale tags
     if tags_to_remove:
@@ -359,7 +401,11 @@ for name in sorted(table_names):
         try:
             run_sql(f"ALTER TABLE {ftn} UNSET TAGS ({key_list})")
         except RuntimeError as e:
-            print(f"  {name}: failed to remove tags: {e}")
+            err = str(e)
+            if "PERMISSION_DENIED" in err:
+                print(f"  {name}: missing APPLY TAG permission — run: GRANT APPLY TAG ON CATALOG `{CATALOG}` TO <principal>")
+            else:
+                print(f"  {name}: failed to remove tags: {e}")
 
     # Update manifest
     new_managed = sorted(k for k in topic_tags.keys() if k)

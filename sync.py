@@ -136,7 +136,20 @@ url = (
 )
 
 while url:
-    resp = requests.get(url, auth=(CONFLUENT_API_KEY, CONFLUENT_API_SECRET), timeout=30)
+    try:
+        resp = requests.get(url, auth=(CONFLUENT_API_KEY, CONFLUENT_API_SECRET), timeout=30)
+    except requests.ConnectionError:
+        print(f"Error: could not reach api.confluent.cloud — check network connectivity")
+        raise SystemExit(1)
+    except requests.Timeout:
+        print(f"Error: Tableflow API request timed out")
+        raise SystemExit(1)
+    if resp.status_code == 401:
+        print("Error: Confluent Cloud authentication failed — check CONFLUENT_API_KEY/SECRET")
+        raise SystemExit(1)
+    if resp.status_code == 403:
+        print("Error: Confluent Cloud access denied — check API key permissions")
+        raise SystemExit(1)
     resp.raise_for_status()
     body = resp.json()
 
@@ -198,12 +211,29 @@ if SYNC_TAGS:
                 "{ qualifiedName tags business_metadata { name value } } }"
                 % (_GRAPHQL_PAGE_SIZE, offset)
             )
-            resp = requests.post(
-                f"{sr_url}/catalog/graphql",
-                auth=sr_auth,
-                json={"query": query},
-                timeout=30,
-            )
+            try:
+                resp = requests.post(
+                    f"{sr_url}/catalog/graphql",
+                    auth=sr_auth,
+                    json={"query": query},
+                    timeout=30,
+                )
+            except requests.ConnectionError:
+                print(f"  Error: could not reach {sr_url} — check SCHEMA_REGISTRY_URL and network connectivity")
+                _tag_fetch_failed = True
+                break
+            except requests.Timeout:
+                print(f"  Error: request to {sr_url} timed out")
+                _tag_fetch_failed = True
+                break
+            if resp.status_code == 401:
+                print("  Error: Schema Registry authentication failed — check SCHEMA_REGISTRY_API_KEY/SECRET")
+                _tag_fetch_failed = True
+                break
+            if resp.status_code == 403:
+                print("  Error: Schema Registry access denied — check API key permissions")
+                _tag_fetch_failed = True
+                break
             resp.raise_for_status()
             body = resp.json()
 
@@ -279,13 +309,26 @@ else:
 def run_sql(sql):
     """Execute a SQL statement on the Databricks warehouse."""
     print(f"  SQL: {sql[:120]}{'...' if len(sql) > 120 else ''}")
-    result = ws.statement_execution.execute_statement(
-        warehouse_id=WAREHOUSE_ID,
-        statement=sql,
-        wait_timeout="30s",
-        disposition=Disposition.INLINE,
-        format=Format.JSON_ARRAY,
-    )
+    try:
+        result = ws.statement_execution.execute_statement(
+            warehouse_id=WAREHOUSE_ID,
+            statement=sql,
+            wait_timeout="30s",
+            disposition=Disposition.INLINE,
+            format=Format.JSON_ARRAY,
+        )
+    except Exception as e:
+        err = str(e)
+        if "NotFound" in type(e).__name__:
+            print(f"Error: SQL warehouse '{WAREHOUSE_ID}' not found — check DATABRICKS_WAREHOUSE_ID")
+            raise SystemExit(1)
+        if "Unauthorized" in type(e).__name__:
+            print("Error: Databricks authentication failed — check DATABRICKS_TOKEN or CLIENT_ID/SECRET")
+            raise SystemExit(1)
+        if "Forbidden" in type(e).__name__:
+            print("Error: Databricks permission denied — ensure the service principal has CAN USE on the SQL warehouse")
+            raise SystemExit(1)
+        raise
     if result.status and result.status.state:
         state = result.status.state.value
         if state == "FAILED":
