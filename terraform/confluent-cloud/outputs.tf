@@ -137,6 +137,7 @@ output "topics_env" {
     SCHEMA_REGISTRY_URL="${data.confluent_schema_registry_cluster.main.rest_endpoint}"
     SCHEMA_REGISTRY_API_KEY="${confluent_api_key.schema_registry.id}"
     SCHEMA_REGISTRY_API_SECRET="${confluent_api_key.schema_registry.secret}"
+    LSRC_ID="${data.confluent_schema_registry_cluster.main.id}"
     S3_BUCKET_NAME="${aws_s3_bucket.tableflow.bucket}"
     PROVIDER_INTEGRATION_ID="${confluent_provider_integration.aws.id}"
     BOOTSTRAP_SERVER="${local.pni_bootstrap_endpoint}"

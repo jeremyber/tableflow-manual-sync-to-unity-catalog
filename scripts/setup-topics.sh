@@ -116,7 +116,67 @@ for topic in orders customers; do
   echo ""
 done
 
+echo ""
+echo "=== Setting up governance tags ==="
+
+# Check if SR credentials are available
+if [ -z "${SCHEMA_REGISTRY_URL:-}" ] || [ -z "${SCHEMA_REGISTRY_API_KEY:-}" ] || [ -z "${SCHEMA_REGISTRY_API_SECRET:-}" ]; then
+  echo "Skipping tag setup — SCHEMA_REGISTRY_URL/API_KEY/API_SECRET not set in .env.topics"
+  echo "To set up tags, add SR credentials and re-run, or apply tags via the CC Console."
+else
+  SR_AUTH="${SCHEMA_REGISTRY_API_KEY}:${SCHEMA_REGISTRY_API_SECRET}"
+  LSRC_ID="${LSRC_ID:-}"
+
+  if [ -z "$LSRC_ID" ]; then
+    echo "Skipping tag setup — LSRC_ID not set in .env.topics"
+  else
+    # Create tag definitions
+    echo "Creating tag definitions: PII, Sensitive, Confidential"
+    curl -s -u "$SR_AUTH" \
+      -X POST "${SCHEMA_REGISTRY_URL}/catalog/v1/types/tagdefs" \
+      -H "Content-Type: application/json" \
+      -d '[{"name": "PII"}, {"name": "Sensitive"}, {"name": "Confidential"}]' \
+      > /dev/null 2>&1 && echo "  -> Tag definitions created" || echo "  -> Tag definitions may already exist"
+
+    # Create business metadata definitions
+    echo "Creating BM definition: DataOwnership (owner, team, priority)"
+    curl -s -u "$SR_AUTH" \
+      -X POST "${SCHEMA_REGISTRY_URL}/catalog/v1/types/businessmetadatadefs" \
+      -H "Content-Type: application/json" \
+      -d '[{"name": "DataOwnership", "attributeDefs": [
+        {"name": "owner", "typeName": "string", "isOptional": true},
+        {"name": "team", "typeName": "string", "isOptional": true},
+        {"name": "priority", "typeName": "string", "isOptional": true}
+      ]}]' \
+      > /dev/null 2>&1 && echo "  -> BM definition created" || echo "  -> BM definition may already exist"
+
+    # Apply tags to topics
+    echo "Applying tags to topics..."
+    curl -s -u "$SR_AUTH" \
+      -X POST "${SCHEMA_REGISTRY_URL}/catalog/v1/entity/tags" \
+      -H "Content-Type: application/json" \
+      -d "[
+        {\"entityType\": \"kafka_topic\", \"entityName\": \"${LSRC_ID}:${CLUSTER_ID}:orders\", \"typeName\": \"PII\"},
+        {\"entityType\": \"kafka_topic\", \"entityName\": \"${LSRC_ID}:${CLUSTER_ID}:orders\", \"typeName\": \"Sensitive\"},
+        {\"entityType\": \"kafka_topic\", \"entityName\": \"${LSRC_ID}:${CLUSTER_ID}:customers\", \"typeName\": \"PII\"},
+        {\"entityType\": \"kafka_topic\", \"entityName\": \"${LSRC_ID}:${CLUSTER_ID}:customers\", \"typeName\": \"Confidential\"}
+      ]" > /dev/null 2>&1 && echo "  -> orders: PII, Sensitive | customers: PII, Confidential" || echo "  -> Tags may already exist"
+
+    # Apply business metadata to topics
+    echo "Applying business metadata to topics..."
+    curl -s -u "$SR_AUTH" \
+      -X POST "${SCHEMA_REGISTRY_URL}/catalog/v1/entity/businessmetadata" \
+      -H "Content-Type: application/json" \
+      -d "[
+        {\"entityType\": \"kafka_topic\", \"entityName\": \"${LSRC_ID}:${CLUSTER_ID}:orders\",
+         \"typeName\": \"DataOwnership\", \"attributes\": {\"owner\": \"payments-team\", \"team\": \"finance\", \"priority\": \"high\"}},
+        {\"entityType\": \"kafka_topic\", \"entityName\": \"${LSRC_ID}:${CLUSTER_ID}:customers\",
+         \"typeName\": \"DataOwnership\", \"attributes\": {\"owner\": \"crm-team\", \"team\": \"marketing\", \"priority\": \"critical\"}}
+      ]" > /dev/null 2>&1 && echo "  -> orders: DataOwnership(payments-team) | customers: DataOwnership(crm-team)" || echo "  -> BM may already exist"
+  fi
+fi
+
+echo ""
 echo "=== Done ==="
-echo "Topics created and Tableflow enabled."
-echo "Once data flows through the topics, Tableflow will materialize"
-echo "Delta + Iceberg tables in s3://$S3_BUCKET_NAME/"
+echo "Topics created, Tableflow enabled, and governance tags applied."
+echo "Once Tableflow status is RUNNING, run: python sync.py"
