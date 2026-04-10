@@ -1,41 +1,41 @@
 # Tableflow Catalog Sync
 
-Registers Confluent Cloud Tableflow tables in Databricks Unity Catalog — for customers who need their data plane to stay private.
+Syncs Confluent Cloud Tableflow tables and governance tags to Databricks Unity Catalog.
+
+**Two capabilities:**
+- **Table sync** — registers Tableflow-materialized tables in Unity Catalog (for customers on private networking where Confluent's native catalog sync can't reach UC)
+- **Tag sync** — syncs classification tags (`PII`, `Sensitive`) and business metadata (`DataOwnership.owner=payments-team`) from Confluent Cloud to Unity Catalog table tags (for any Tableflow + UC customer)
 
 ## The Problem
 
-Customers running Confluent Cloud clusters with private networking (enterprise with PNI, or dedicated with PrivateLink) have effectively chosen to **avoid public network paths for accessing their data infrastructure**. Tableflow materializes Kafka topics as Delta Lake tables into customer-owned storage (BYOB), but two gaps prevent these tables from appearing in Unity Catalog:
+**1. No catalog path over private networking.** Customers running Confluent Cloud clusters with private networking (enterprise with PNI, or dedicated with PrivateLink) can't use Confluent's built-in Iceberg REST Catalog or native catalog sync to register Tableflow tables in Unity Catalog. The data sits in the customer's own S3 bucket — but UC doesn't know about it.
 
-1. **No Iceberg REST Catalog over private networking.** Confluent's built-in Iceberg REST Catalog (IRC) — the catalog that query engines would normally use to discover Tableflow tables — is not available over private networking. There is no inbound private networking support for it today.
-
-2. **Native catalog sync can't traverse private catalog endpoints.** Tableflow's built-in integrations (Unity Catalog, Snowflake Open Catalog, Polaris) require egress connectivity from Confluent's side to the customer's catalog. When that catalog is behind private networking, there's currently no supported private egress path from Confluent to it.
-
-The data is sitting in the customer's own S3 bucket, accessible within their VPC — but there's no private-network-compatible catalog path to register it in Unity Catalog.
+**2. Governance metadata is silently dropped.** When Tableflow materializes topics into tables and syncs them to Unity Catalog, classification tags and business metadata applied in Confluent Cloud are not carried over. Customers must manually re-tag every table in Databricks, doubling governance effort and creating drift between the two systems.
 
 ## What This Tool Does
 
-It bridges the gap by discovering Tableflow-enabled topics via the Confluent Cloud control-plane API (metadata only — topic names and storage paths), then registering them as external tables in Unity Catalog. No data is copied. The data plane stays private.
-
-## How It Works
-
 ```
-Confluent Cloud API                    Your Machine
-(control plane)                        (laptop / CI / any compute)
+Confluent Cloud                         Your Machine
+                                        (laptop / CI / any compute)
 
-+---------------------+               +---------------------------+
-| Confluent Cloud     |               |                           |
-|                     |   1. Discover | +---------------------+   |
-| Tableflow Topics    |<--------------| | python sync.py      |   |
-| (storage locations) | via REST API  | +----------+----------+   |
-+---------------------+  (HTTPS)      |            |              |
-                                       |   2. Register tables      |
++---------------------+                +---------------------------+
+| Tableflow API       |  1. Discover   |                           |
+| (topic + storage    |<---------------| python sync.py            |
+|  metadata)          |  via REST API  |   or                      |
++---------------------+                | python sync_tags.py       |
+                                       |            |              |
++---------------------+  2. Fetch tags |            |              |
+| Stream Catalog      |<---------------+            |              |
+| GraphQL API         |  (tags + BM)   |            |              |
++---------------------+                |   3. Register tables      |
+                                       |      + apply tags         |
                                        |   (SQL over HTTPS)        |
                                        |            v              |
-                                       | +---------------------+  |
-                                       | | Databricks          |  |
-                                       | | Unity Catalog       |  |
-                                       | +---------------------+  |
-                                       +---------------------------+
+                                       | +---------------------+   |
+                                       | | Databricks          |   |
+                                       | | Unity Catalog       |   |
+                                       | +---------------------+   |
+                                       +----------------------------+ 
 ```
 
 **What SQL does the sync run?**
@@ -44,20 +44,23 @@ Confluent Cloud API                    Your Machine
 |--------|-----|
 | Create catalog | `CREATE CATALOG IF NOT EXISTS <catalog>` |
 | Create schema | `CREATE SCHEMA IF NOT EXISTS <catalog>.<schema>` |
-| List existing tables | `SELECT table_schema, table_name, comment FROM <catalog>.information_schema.tables WHERE table_type = 'EXTERNAL'` |
-| Register new table | `CREATE TABLE IF NOT EXISTS <catalog>.<schema>.<topic> USING DELTA LOCATION '<s3_path>' COMMENT '<s3_path>'` |
+| List existing tables | `SELECT ... FROM <catalog>.information_schema.tables WHERE table_type = 'EXTERNAL'` |
+| Register new table | `CREATE TABLE IF NOT EXISTS <catalog>.<schema>.<topic> USING DELTA LOCATION '<s3_path>'` |
 | Update changed table | `DROP TABLE IF EXISTS ...` then `CREATE TABLE ...` (metadata only — data untouched) |
 | Read table tags | `SELECT tag_name, tag_value FROM <catalog>.information_schema.table_tags WHERE ...` |
-| Apply tags | `ALTER TABLE <catalog>.<schema>.<topic> SET TAGS ('PII' = 'true', ...)` |
+| Apply tags | `ALTER TABLE ... SET TAGS ('PII' = 'true', ...)` |
+| Remove stale tags | `ALTER TABLE ... UNSET TAGS ('PII')` |
 
 The sync is **idempotent** — running it multiple times with no changes produces zero updates.
 
 ## Prerequisites
 
-- **Confluent Cloud** account with a Cloud API key (org-level)
-- **AWS account** with permissions to create VPC, IAM, S3, EC2 resources
-- **Databricks workspace** with Unity Catalog and a SQL warehouse (see [SQL warehouse note](#sql-warehouse-note) on cost)
-- **Tools**: Python 3.11+, Terraform 1.5+, AWS CLI configured
+- **Confluent Cloud** account with a Tableflow API key (scoped to `tableflow/v1`)
+- **Databricks workspace** with Unity Catalog and a SQL warehouse
+- **Authentication**: Databricks personal access token or service principal (client ID + secret)
+- **For table sync** (`sync.py`): storage credential + external location in UC pointing to the BYOB bucket
+- **For tag sync**: Stream Governance Advanced package, Schema Registry API key
+- **For Terraform setup** (optional): AWS account, Python 3.11+, Terraform 1.5+
 
 ## Using with an Existing Environment
 
@@ -71,7 +74,7 @@ If you already have a Confluent Cloud cluster (enterprise or dedicated) with BYO
 | **Tableflow API key** | Scoped to Tableflow (`managed_resource: tableflow/v1`) — not an org-level Cloud API key |
 | **Schema Registry API key** | For tag sync — scoped to the SR cluster in your environment |
 | **Stream Governance** | Advanced package required for classification tags and business metadata |
-| **Databricks** | Workspace with Unity Catalog, a SQL warehouse, and a personal access token |
+| **Databricks** | Workspace with Unity Catalog, a SQL warehouse, and a personal access token or service principal |
 | **Databricks storage credential** | IAM role (AWS) or managed identity (Azure) that can read the BYOB bucket |
 | **Databricks external location** | Pointing to the BYOB bucket, using the storage credential above |
 
@@ -182,6 +185,8 @@ The script:
 2. Waits for connectors to reach `RUNNING` state
 3. Enables **Tableflow** on each topic via the Tableflow API (BYOB to the S3 bucket from Phase 1)
 
+> **Note:** The demo script does not set up governance tags. To test tag sync, apply tags to your topics via the [Confluent Cloud Console](https://confluent.cloud/) (Stream Catalog UI) or the [Stream Catalog REST API](https://docs.confluent.io/cloud/current/stream-governance/stream-catalog-rest-apis.html) after Phase 2, then run Phase 3 with `SYNC_TAGS=true`.
+
 After the script completes, Tableflow begins materializing Delta files in S3. The sync script automatically checks that each topic's Tableflow status is `RUNNING` before registering it — topics still materializing are skipped and will be picked up on the next run.
 
 ### Phase 3: Run the Sync (Demo)
@@ -207,8 +212,7 @@ Ensuring catalog 'tableflow_sync' and schema 'lkc-xxxxx' exist...
   SQL: CREATE CATALOG IF NOT EXISTS `tableflow_sync`
   SQL: CREATE SCHEMA IF NOT EXISTS `tableflow_sync`.`lkc-xxxxx`
 
-Listing existing tables in tableflow_sync...
-  SQL: SELECT table_schema, table_name, comment FROM tableflow_sync.information_schema.tables ...
+Listing existing tables in tableflow_sync.lkc-xxxxx...
 Found 0 existing tables: (none)
 
 Sync plan: 2 to add, 0 to update, 0 to remove
@@ -255,7 +259,9 @@ All configuration is via environment variables. `sync.py` automatically loads `.
 | `CONFLUENT_CLUSTER_ID` | Yes | Kafka cluster ID (e.g., `lkc-xxxxx`) |
 | `CONFLUENT_ENVIRONMENT_ID` | Yes | Environment ID (e.g., `env-xxxxx`) |
 | `DATABRICKS_HOST` | Yes | Workspace URL (e.g., `https://dbc-xxxxx.cloud.databricks.com`) |
-| `DATABRICKS_TOKEN` | Yes | Personal access token |
+| `DATABRICKS_TOKEN` | Yes* | Personal access token (*or use `CLIENT_ID`/`CLIENT_SECRET` instead) |
+| `DATABRICKS_CLIENT_ID` | No | Service principal client ID (alternative to token) |
+| `DATABRICKS_CLIENT_SECRET` | No | Service principal client secret |
 | `DATABRICKS_WAREHOUSE_ID` | Yes | SQL warehouse ID for executing statements |
 | `TARGET_CATALOG` | Yes | Unity Catalog catalog name |
 | `TARGET_SCHEMA` | No | Schema name (default: `default`) |
@@ -286,17 +292,17 @@ Tags are fetched from the [Stream Catalog GraphQL API](https://docs.confluent.io
 
 **Safety:**
 - UC-native tags (added directly in Databricks) are never touched
-- A manifest tracks which tags are managed by this tool (stored in Databricks workspace)
+- A manifest tracks which tags are managed by this tool (stored in table properties for `sync.py`, Databricks workspace file for `sync_tags.py`)
 - Tags removed from Confluent are fully removed from UC via `ALTER TABLE UNSET TAGS`
 - Tag sync failures don't block table sync
 
 ### Which mode to use
 
-1. **Already using Confluent's native Tableflow catalog sync?** Use `sync_tags.py` — it syncs tags to tables that are already in Unity Catalog. No Tableflow API key needed.
+1. **Want to sync both tables and tags via this tool?** Use `sync.py` — handles everything in one pass. This is the default and recommended mode.
 
-2. **Want this tool to sync both tables and tags?** Use `sync.py` with `SYNC_TAGS=true` (the default) — handles everything in one pass.
+2. **Only need table sync, no tags?** Use `sync.py` with `SYNC_TAGS=false` — no Schema Registry credentials needed.
 
-3. **Only need table sync, no tags?** Use `sync.py` with `SYNC_TAGS=false` — no Schema Registry credentials needed.
+3. **Already using Confluent's native Tableflow catalog sync?** Use `sync_tags.py` — syncs tags to tables already in Unity Catalog. No Tableflow API key needed.
 
 > **Important:** Do not run `sync.py` with `SYNC_TAGS=true` and `sync_tags.py` against the same tables. Both manage tags with separate manifests and will conflict. Pick one approach for tags.
 
@@ -422,14 +428,14 @@ terraform/
 
 ## Automating the Sync
 
-`sync.py` is a standalone script with two dependencies (`requests`, `databricks-sdk`) and nine environment variables. You can run it on a schedule from any compute that can reach `api.confluent.cloud` (HTTPS) and your Databricks workspace. Below are two examples.
+Both `sync.py` and `sync_tags.py` are standalone scripts with two dependencies (`requests`, `databricks-sdk`). You can run either on a schedule from any compute that can reach `api.confluent.cloud` (HTTPS) and your Databricks workspace. Below are two examples using `sync.py` — the same patterns apply to `sync_tags.py`.
 
 ### Option A: AWS Lambda + EventBridge
 
 **What you need:**
 - A Lambda deployment package containing `sync.py` and the `catalog_sync/` module plus dependencies
 - An EventBridge rule to trigger the Lambda on a schedule
-- The nine environment variables set on the Lambda configuration
+- The environment variables set on the Lambda configuration (see Configuration table above)
 - IAM role with permissions for CloudWatch Logs (and VPC networking if your Databricks workspace is behind PrivateLink)
 
 **Steps:**
@@ -441,7 +447,7 @@ terraform/
     ./scripts/build_lambda.sh
     ```
 
-2. **Create the Lambda function.** The entry point is `catalog_sync.handler.lambda_handler` — a thin wrapper around the same logic as `sync.py`. Set the nine environment variables (from `.env.sync`) on the Lambda configuration.
+2. **Create the Lambda function.** The entry point is `catalog_sync.handler.lambda_handler` — a thin wrapper around the same logic as `sync.py`. Set the environment variables (from `.env.sync`) on the Lambda configuration.
 
 3. **Add a schedule.** Create an EventBridge rule with a rate expression (e.g., `rate(15 minutes)`) targeting the Lambda function.
 
@@ -456,7 +462,7 @@ A working Terraform example is in `terraform/demo/` — it creates the Lambda, I
 **What you need:**
 - An Azure Function App (Python 3.11+ runtime)
 - A timer trigger (cron expression, e.g., `0 */15 * * * *` for every 15 minutes)
-- The nine environment variables set as Application Settings
+- The environment variables set as Application Settings (see Configuration table above)
 - Outbound HTTPS access to `api.confluent.cloud` and your Databricks workspace
 
 **Steps:**
@@ -601,8 +607,8 @@ All credentials are transmitted over TLS. For automated deployments, store them 
 
 ## Future: Native Sync
 
-When Confluent adds private networking support for the Iceberg REST Catalog or enables native catalog sync (Unity Catalog, Polaris, etc.) over private networking, this tool becomes unnecessary. To migrate:
+When Confluent adds private networking support for the Iceberg REST Catalog or enables native catalog sync over private networking, `sync.py` becomes unnecessary. When Confluent ships native tag sync on Tableflow, `sync_tags.py` also becomes unnecessary. To migrate:
 
 1. Drop the externally registered tables (`DROP TABLE ...` — metadata only, data untouched)
-2. Enable Tableflow's built-in catalog integration
+2. Enable Tableflow's built-in catalog integration (with tag sync enabled)
 3. Remove this tool
