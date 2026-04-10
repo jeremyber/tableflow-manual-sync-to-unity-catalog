@@ -23,19 +23,19 @@ Confluent Cloud                         Your Machine
 | (topic + storage    |<---------------| python sync.py            |
 |  metadata)          |  via REST API  |   or                      |
 +---------------------+                | python sync_tags.py       |
-                                        |            |              |
+                                       |            |              |
 +---------------------+  2. Fetch tags |            |              |
 | Stream Catalog      |<---------------+            |              |
 | GraphQL API         |  (tags + BM)   |            |              |
 +---------------------+                |   3. Register tables      |
-                                        |      + apply tags         |
-                                        |   (SQL over HTTPS)        |
-                                        |            v              |
-                                        | +---------------------+  |
-                                        | | Databricks          |  |
-                                        | | Unity Catalog       |  |
-                                        | +---------------------+  |
-                                        +---------------------------+
+                                       |      + apply tags         |
+                                       |   (SQL over HTTPS)        |
+                                       |            v              |
+                                       | +---------------------+   |
+                                       | | Databricks          |   |
+                                       | | Unity Catalog       |   |
+                                       | +---------------------+   |
+                                       +----------------------------+ 
 ```
 
 **What SQL does the sync run?**
