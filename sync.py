@@ -231,12 +231,8 @@ if SYNC_TAGS:
                 print(f"  Error: request to {sr_url} timed out")
                 _tag_fetch_failed = True
                 break
-            if resp.status_code == 401:
-                print("  Error: Schema Registry authentication failed — check SCHEMA_REGISTRY_API_KEY/SECRET")
-                _tag_fetch_failed = True
-                break
-            if resp.status_code == 403:
-                print("  Error: Schema Registry access denied — check API key permissions")
+            if resp.status_code in (401, 403, 404):
+                print(f"  Error ({resp.status_code}): {resp.text[:300]}")
                 _tag_fetch_failed = True
                 break
             resp.raise_for_status()

@@ -232,8 +232,9 @@ if not table_names:
 
 # ── Step 2: Fetch governance tags via GraphQL ────────────────
 
-print(f"\nFetching governance tags via GraphQL...")
 sr_auth = (SR_API_KEY, SR_API_SECRET)
+
+print(f"\nFetching governance tags via GraphQL...")
 source_tags: dict[str, dict[str, str]] = {}
 _tag_fetch_failed = False
 
@@ -260,12 +261,8 @@ try:
             print(f"  Error: request to {SR_URL} timed out")
             _tag_fetch_failed = True
             break
-        if resp.status_code == 401:
-            print("  Error: Schema Registry authentication failed — check SCHEMA_REGISTRY_API_KEY/SECRET")
-            _tag_fetch_failed = True
-            break
-        if resp.status_code == 403:
-            print("  Error: Schema Registry access denied — check API key permissions")
+        if resp.status_code in (401, 403, 404):
+            print(f"  Error ({resp.status_code}): {resp.text[:300]}")
             _tag_fetch_failed = True
             break
         resp.raise_for_status()
