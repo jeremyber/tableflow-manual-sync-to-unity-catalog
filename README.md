@@ -171,9 +171,9 @@ A **bastion host** is provisioned in the public subnet with an NGINX stream prox
 ssh -i bastion-key.pem ec2-user@$(terraform output -raw bastion_public_ip)
 ```
 
-### Phase 2: Create Topics + Enable Tableflow + Apply Tags
+### Phase 2: Create Topics + Enable Tableflow
 
-Create sample topics with datagen connectors, enable Tableflow, and apply governance tags. These scripts use the public Confluent Cloud API (`api.confluent.cloud`) — run from your local machine.
+Create sample topics with datagen connectors and enable Tableflow on them. These scripts use the public Confluent Cloud API (`api.confluent.cloud`) — run from your local machine. Alternatively, you can create topics and enable Tableflow manually in the Confluent Cloud console.
 
 ```bash
 # From: project root (your local machine)
@@ -184,8 +184,8 @@ The script:
 1. Creates **datagen connectors** via the Connect API (auto-generates `orders` and `customers` topics with Avro schemas)
 2. Waits for connectors to reach `RUNNING` state
 3. Enables **Tableflow** on each topic via the Tableflow API (BYOB to the S3 bucket from Phase 1)
-4. Creates **tag definitions** (`PII`, `Sensitive`, `Confidential`) and **business metadata definitions** (`DataOwnership`) via the Stream Catalog API
-5. Applies tags and business metadata to the demo topics
+
+> **Note:** The demo script does not set up governance tags. To test tag sync, apply tags to your topics via the [Confluent Cloud Console](https://confluent.cloud/) (Stream Catalog UI) or the [Stream Catalog REST API](https://docs.confluent.io/cloud/current/stream-governance/stream-catalog-rest-apis.html) after Phase 2, then run Phase 3 with `SYNC_TAGS=true`.
 
 After the script completes, Tableflow begins materializing Delta files in S3. The sync script automatically checks that each topic's Tableflow status is `RUNNING` before registering it — topics still materializing are skipped and will be picked up on the next run.
 
@@ -208,33 +208,25 @@ Expected output:
 Discovering Tableflow topics for cluster lkc-xxxxx...
 Found 2 Tableflow topics: customers, orders
 
-Fetching governance tags via GraphQL...
-  customers: Confidential=true, DataOwnership_owner=crm-team, DataOwnership_priority=critical, DataOwnership_team=marketing, PII=true
-  orders: DataOwnership_owner=payments-team, DataOwnership_priority=high, DataOwnership_team=finance, PII=true, Sensitive=true
-
 Ensuring catalog 'tableflow_sync' and schema 'lkc-xxxxx' exist...
+  SQL: CREATE CATALOG IF NOT EXISTS `tableflow_sync`
+  SQL: CREATE SCHEMA IF NOT EXISTS `tableflow_sync`.`lkc-xxxxx`
+
+Listing existing tables in tableflow_sync.lkc-xxxxx...
+Found 0 existing tables: (none)
 
 Sync plan: 2 to add, 0 to update, 0 to remove
 
 + Adding: customers
+  SQL: CREATE TABLE IF NOT EXISTS `tableflow_sync`.`lkc-xxxxx`.`customers` USING DELTA ...
+
 + Adding: orders
+  SQL: CREATE TABLE IF NOT EXISTS `tableflow_sync`.`lkc-xxxxx`.`orders` USING DELTA ...
 
 Done: 2 added, 0 updated, 0 removed
-
-Syncing governance tags for 2 table(s)...
-  customers: 5 added/updated
-  orders: 5 added/updated
-
-Tags: 10 change(s) applied
 ```
 
-Tables and tags are now visible in Databricks Unity Catalog under `tableflow_sync.<cluster_id>`. Verify tags:
-
-```sql
-SELECT table_name, tag_name, tag_value
-FROM tableflow_sync.information_schema.table_tags
-ORDER BY table_name, tag_name;
-```
+Tables are now visible in Databricks Unity Catalog under `tableflow_sync.<cluster_id>`.
 
 Run it again to verify idempotency — zero changes:
 
