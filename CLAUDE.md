@@ -157,3 +157,50 @@ cd terraform/confluent-cloud && terraform init && terraform validate
 - `sync.py` is cloud-agnostic and works on Azure today
 - Needs: `terraform/confluent-cloud-azure/` with VNet, Azure Private Link, ADLS Gen2, Azure bastion VM, Databricks resources
 - BYOB would use ADLS Gen2 instead of S3
+
+## Extending This Tool
+
+This tool is designed to be extensible for multiple catalog targets and cloud providers. It's built with a **source/target pattern**: sources discover tables from data platforms (like Tableflow), targets register them in catalogs (like Unity Catalog), and the engine orchestrates the sync.
+
+**Why extend this tool?**
+- Multi-cloud deployments require Azure and GCP support
+- Customers use diverse catalog solutions (Snowflake, Polaris, BigQuery, AWS Glue)
+- Private networking requirements vary by cloud provider
+- Data governance strategies are not one-size-fits-all
+
+**Current Support vs Roadmap:**
+
+| Component | Status | Notes |
+|-----------|--------|-------|
+| **Catalog Targets** |
+| Unity Catalog | ✅ Supported | Via Databricks SQL |
+| Snowflake Open Catalog | 🔄 Planned | High customer demand |
+| Apache Polaris | 🔄 Planned | Azure customers requesting |
+| BigQuery/BigLake | 🔄 Planned | GCP integration |
+| AWS Glue enhancements | 🔄 Planned | Custom naming, multi-catalog support |
+| **Cloud Providers** |
+| AWS (S3, PNI) | ✅ Supported | Enterprise clusters with private networking |
+| Azure (ADLS, Private Link) | 🔄 Planned | Terraform + BYOB architecture ready |
+| GCP (GCS, Private Service Connect) | 🔄 Planned | Awaiting Tableflow GA on GCP |
+
+**Extension Points:**
+
+1. **Catalog targets** — Implement the `Target` interface to sync tables to new catalogs (Snowflake, Polaris, BigQuery, etc.)
+2. **Cloud providers** — Adapt Terraform for Azure VNets, GCP VPCs, and cloud-specific storage integration
+3. **Data sources** — Currently only Tableflow, but the architecture supports other discovery mechanisms
+4. **Core stays cloud-agnostic** — `sync.py` and `catalog_sync/` modules run anywhere; cloud differences live in Terraform and catalog configuration
+
+**Detailed Extension Guides:**
+
+- **[Architecture Overview](docs/extending/architecture-overview.md)** — Start here to understand the source/target pattern, interface contracts, and data flow
+- **[Adding Catalog Targets](docs/extending/add-catalog-target.md)** — How to add support for Snowflake, Polaris, BigQuery, and other catalogs
+- **[Adding Cloud Providers](docs/extending/add-cloud-provider.md)** — Azure and GCP Terraform patterns, storage integration, and networking
+- **[Best Practices](docs/extending/best-practices.md)** — Design principles: cloud-agnostic core, interface contracts, testing, error handling
+
+**Quick Start for Contributors:**
+
+1. Read the architecture overview to understand the source/target pattern
+2. Look at existing implementations as reference (`catalog_sync/targets/unity_catalog.py`, `terraform/confluent-cloud/`)
+3. Follow interface contracts defined in `catalog_sync/targets/base.py` and `catalog_sync/sources/base.py`
+4. Apply best practices: keep core cloud-agnostic, test with mocked APIs, provide actionable errors
+5. Test with live infrastructure only after unit tests pass
