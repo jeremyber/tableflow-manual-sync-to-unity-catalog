@@ -1,7 +1,7 @@
 # Iceberg Metadata Refresh Design
 
 **Date:** 2026-04-28  
-**Status:** Approved  
+**Status:** Future Work (Not Yet Implemented)  
 **Author:** Claude Sonnet 4.5
 
 ## Problem Statement

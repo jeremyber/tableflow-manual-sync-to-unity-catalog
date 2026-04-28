@@ -17,6 +17,22 @@ The codebase already handles Iceberg at the code level:
 - Remove the "dual format fails" warnings from CLAUDE.md once confirmed
 - Verify `CREATE TABLE ... USING ICEBERG LOCATION` syntax on target Databricks Runtime version
 
+### Iceberg Metadata Refresh Issue
+
+**Problem:** Iceberg tables registered as external tables in Unity Catalog (or Snowflake) go stale when Tableflow writes new data. Delta auto-refreshes from `_delta_log/`, but Iceberg requires explicit `REFRESH TABLE` commands because the catalog materializes a snapshot of metadata.
+
+**Solution:** Add `supports_format()` and `refresh_table()` methods to the Target interface. After creating or updating a table, call `refresh_table()` to sync metadata from the source Iceberg catalog.
+
+**Status:** Design spec written (`docs/superpowers/specs/2026-04-28-iceberg-metadata-refresh-design.md`), not yet implemented.
+
+**Unity Catalog implementation:** Will stay Delta-only initially; refresh method is a no-op. Future catalog targets (Snowflake, Polaris) will implement Iceberg refresh.
+
+**User feedback (2026-04-28):** Overall architecture aligns well with how Tableflow is evolving. Key nuances to address when implementing:
+- Target-aware format selection (Polaris prefers Iceberg, Unity prefers Delta, not just "pick Delta if both exist")
+- Idempotency and drift handling (tolerate tables being dropped/recreated in target catalog)
+- Event-based refresh triggering (integrate with S3/ADLS event notifications from Option E below)
+- Schema evolution handling (event filters should catch schema changes, not just initial commits)
+
 ## 2. Multi-Lakehouse Target Support
 
 The `CatalogTarget` ABC already defines the interface: `list_tables`, `register_table`, `update_table`, `remove_table`. New targets implement this interface.
