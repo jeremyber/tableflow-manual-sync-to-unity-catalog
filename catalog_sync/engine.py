@@ -16,6 +16,7 @@ class SyncResult:
     updated: int = 0
     removed: int = 0
     tags_synced: int = 0
+    refreshed: int = 0
 
     @property
     def total_changes(self) -> int:
@@ -34,7 +35,10 @@ class SyncEngine:
         self._sync_tags = sync_tags
 
     def sync(self) -> SyncResult:
-        source_table_list = self._source.list_tables()
+        source_table_list = [
+            t for t in self._source.list_tables()
+            if self._target_supports(t)
+        ]
         source_tables = {t.full_name: t for t in source_table_list}
         target_tables = {t.full_name: t for t in self._target.list_tables()}
 
@@ -85,12 +89,32 @@ class SyncEngine:
             self._target.remove_table(table.namespace, table.name)
             removed += 1
 
+        # Refresh every synced table on every run, not just added/updated
+        # ones: Tableflow keeps committing new snapshots to unchanged tables,
+        # and Iceberg targets that pin a metadata file go stale otherwise.
+        refreshed = 0
+        for name in sorted(to_add | to_check):
+            try:
+                if self._target.refresh_table(source_tables[name]):
+                    refreshed += 1
+            except Exception:
+                logger.warning("Refresh failed for %s, continuing", name, exc_info=True)
+
         result = SyncResult(
             added=added, updated=updated, removed=removed,
-            tags_synced=tags_synced,
+            tags_synced=tags_synced, refreshed=refreshed,
         )
         logger.info("Sync complete: %s", result)
         return result
+
+    def _target_supports(self, table: TableInfo) -> bool:
+        if self._target.supports_format(table.table_format):
+            return True
+        logger.info(
+            "Skipping %s: target does not support format %s",
+            table.full_name, table.table_format,
+        )
+        return False
 
     def _needs_update(self, source: TableInfo, target: TableInfo) -> bool:
         return source.columns != target.columns or source.location != target.location

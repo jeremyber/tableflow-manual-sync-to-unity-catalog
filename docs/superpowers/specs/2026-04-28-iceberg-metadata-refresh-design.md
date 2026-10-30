@@ -1,7 +1,7 @@
 # Iceberg Metadata Refresh Design
 
 **Date:** 2026-04-28  
-**Status:** Future Work (Not Yet Implemented)  
+**Status:** Implemented for Snowflake (see "Implementation notes" at the end)  
 **Author:** Claude Sonnet 4.5
 
 ## Problem Statement
@@ -617,3 +617,30 @@ Future catalog implementations (Snowflake, Polaris, BigQuery) will:
 - Unity Catalog `REFRESH TABLE` documentation
 - Snowflake Iceberg external tables documentation
 - Internal Slack discussions on Tableflow + Iceberg gaps
+
+## Implementation notes
+
+Built against a live Azure deployment (Enterprise cluster on Private Link, ADLS Gen2 behind a
+storage firewall, Snowflake on Azure). Where it differs from the design above:
+
+- **Refresh every synced table on every run, not only after create/update.** Tableflow keeps
+  committing snapshots to tables whose location never changes, so refreshing only on
+  create/update leaves them stale. The engine calls `refresh_table()` for added and unchanged
+  tables each run; targets make it a no-op when nothing moved (Snowflake compares the current
+  `metadataLocation` first), and failures are logged per table without blocking the sync.
+- **`refresh_table(table: TableInfo) -> bool`** instead of `(table_name, format)`. Snowflake
+  needs the table's storage location to find the newest snapshot, and the bool lets the engine
+  report `SyncResult.refreshed`.
+- **Snowflake needs an explicit metadata file.** `ALTER ICEBERG TABLE ... REFRESH` without a path
+  only works for tables backed by a catalog integration that can be queried (e.g. an IRC). Over
+  private networking there is no reachable catalog, so tables use an object-store catalog
+  integration and must be refreshed with `ALTER ICEBERG TABLE ... REFRESH '<metadata file>'`.
+  The Tableflow API only returns the table root (`table_path`), so
+  `catalog_sync/iceberg_metadata.py` lists `metadata/*.metadata.json` in S3/ADLS and picks the
+  highest version.
+- **Target-aware format selection.** `ConfluentCloudSource(preferred_formats=...)` picks the
+  target's preferred format when a topic publishes several (Snowflake: Iceberg; default stays
+  Delta), and `validate_table_format()` takes an allow-list so Unity Catalog keeps rejecting
+  Iceberg exactly as before.
+- **Drift.** Tables dropped in Snowflake are re-registered on the next run; only tables whose
+  COMMENT starts with `catalog-sync` are touched.

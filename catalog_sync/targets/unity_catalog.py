@@ -134,6 +134,15 @@ class UnityCatalogTarget(CatalogTarget):
         self.remove_table(table.namespace, table.name)
         self.register_table(table)
 
+    def supports_format(self, table_format: str) -> bool:
+        # Delta only for now: UC does not follow Iceberg metadata written by
+        # an external writer, so registered Iceberg tables would go stale.
+        return table_format.upper() == "DELTA"
+
+    def refresh_table(self, table: TableInfo) -> bool:
+        # Delta auto-refreshes from _delta_log/ on every query.
+        return False
+
     def remove_table(self, namespace: str, name: str) -> None:
         sql = f"DROP TABLE IF EXISTS {self._full_table_name(namespace, name)}"
         logger.info("Removing table: %s.%s", namespace, name)

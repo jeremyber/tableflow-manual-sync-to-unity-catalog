@@ -146,3 +146,18 @@ def test_list_tables_queries_information_schema(mock_ws_cls):
     assert len(tables) == 1
     assert tables[0].name == "orders"
     assert tables[0].namespace == "default"
+
+
+@patch("catalog_sync.targets.unity_catalog.WorkspaceClient")
+def test_supports_delta_only(mock_ws_cls):
+    target, _ = _make_target(mock_ws_cls)
+    assert target.supports_format("DELTA")
+    assert not target.supports_format("ICEBERG")
+
+
+@patch("catalog_sync.targets.unity_catalog.WorkspaceClient")
+def test_refresh_table_is_noop_for_delta(mock_ws_cls):
+    target, mock_ws = _make_target(mock_ws_cls)
+
+    assert target.refresh_table(_table()) is False
+    mock_ws.statement_execution.execute_statement.assert_not_called()

@@ -29,6 +29,16 @@ Examples of compatible catalogs:
 - Tag sync: `ALTER TABLE SET TAGS ('key' = 'value')`
 - Idempotency: Stores location in `COMMENT` field
 
+**Snowflake** (Iceberg) via Snowflake SQL:
+- Location: `catalog_sync/targets/snowflake.py` (standalone: `sync_snowflake.py`)
+- Table creation: `CREATE ICEBERG TABLE ... CATALOG = <object store integration> METADATA_FILE_PATH = '...'`
+- Refresh: `ALTER ICEBERG TABLE ... REFRESH '<newest metadata.json>'` from `refresh_table()`, every run
+- Idempotency: Stores topic name + `table_path` in `COMMENT`
+- Tag sync: not implemented yet
+
+The skeleton below predates the implementation; use `targets/snowflake.py` as the reference for
+Iceberg targets (`supports_format()`, `refresh_table()`, `iceberg_metadata.py`).
+
 ### Next Known Target: Snowflake Open Catalog
 
 Snowflake is the most requested catalog target. This guide uses Snowflake as a reference example, but the patterns apply to any catalog.

@@ -164,3 +164,20 @@ def test_list_tables_passes_auth_and_params(mock_get):
     assert call_args[1]["auth"] == ("key", "secret")
     assert "lkc-abc123" in call_args[0][0]
     assert "env-xyz" in call_args[0][0]
+
+
+@patch("catalog_sync.sources.confluent_cloud.requests.get")
+def test_list_tables_prefers_target_format(mock_get):
+    mock_get.return_value = _api_response([
+        _topic("both", "s3://bucket/warehouse/both", table_formats=["DELTA", "ICEBERG"]),
+        _topic("ice", "s3://bucket/warehouse/ice", table_formats=["ICEBERG"]),
+        _topic("delta", "s3://bucket/warehouse/delta", table_formats=["DELTA"]),
+    ])
+    source = ConfluentCloudSource(
+        api_key="k", api_secret="s", cluster_id="lkc-abc", environment_id="env-xyz",
+        preferred_formats=("ICEBERG",),
+    )
+
+    tables = source.list_tables()
+
+    assert [(t.name, t.table_format) for t in tables] == [("both", "ICEBERG"), ("ice", "ICEBERG")]

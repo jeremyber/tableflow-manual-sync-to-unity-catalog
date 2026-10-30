@@ -10,8 +10,11 @@ _UC_TAG_KEY_INVALID = re.compile(r"[.,\-=/:\s';\(\)`]+")
 # Safe pattern for SQL identifiers (catalog, schema, table names)
 _SAFE_IDENTIFIER = re.compile(r"^[a-zA-Z0-9_\-]+$")
 
-# Allowed table formats for USING clause
+# Allowed table formats for USING clause (Unity Catalog target, default source)
 VALID_TABLE_FORMATS = {"DELTA"}
+
+# Every format Tableflow can publish; targets declare which they accept
+KNOWN_TABLE_FORMATS = {"DELTA", "ICEBERG"}
 
 
 def validate_identifier(value: str, label: str = "identifier") -> str:
@@ -29,12 +32,17 @@ def validate_identifier(value: str, label: str = "identifier") -> str:
     return value
 
 
-def validate_table_format(fmt: str) -> str:
-    """Validate table format against known values."""
+def validate_table_format(fmt: str, allowed: set[str] | None = None) -> str:
+    """Validate table format against known values.
+
+    ``allowed`` defaults to VALID_TABLE_FORMATS (Delta only) so existing
+    callers keep their behavior; Iceberg-capable targets pass their own set.
+    """
+    allowed = VALID_TABLE_FORMATS if allowed is None else allowed
     upper = fmt.upper()
-    if upper not in VALID_TABLE_FORMATS:
+    if upper not in allowed:
         raise ValueError(
-            f"Unknown table format: {fmt!r} — expected one of {VALID_TABLE_FORMATS}"
+            f"Unknown table format: {fmt!r} — expected one of {allowed}"
         )
     return upper
 

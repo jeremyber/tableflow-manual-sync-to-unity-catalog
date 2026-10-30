@@ -32,3 +32,23 @@ class CatalogTarget(ABC):
 
         Returns the number of tag changes applied.
         """
+
+    def supports_format(self, table_format: str) -> bool:
+        """Return True if this target can register tables in ``table_format``.
+
+        The engine skips source tables whose format the target does not
+        support. Defaults to Delta only, matching the original behavior.
+        """
+        return table_format.upper() == "DELTA"
+
+    def refresh_table(self, table: TableInfo) -> bool:
+        """Point the target's metadata at the table's latest snapshot.
+
+        Called by the engine for every synced table on every run. Delta
+        targets read ``_delta_log/`` on query and need nothing (the default
+        no-op). Iceberg targets that pin a metadata file must refresh here.
+
+        Returns True if a refresh was applied. Implementations may raise;
+        the engine logs and continues so one table can't block the sync.
+        """
+        return False

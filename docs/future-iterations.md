@@ -23,9 +23,9 @@ The codebase already handles Iceberg at the code level:
 
 **Solution:** Add `supports_format()` and `refresh_table()` methods to the Target interface. After creating or updating a table, call `refresh_table()` to sync metadata from the source Iceberg catalog.
 
-**Status:** Design spec written (`docs/superpowers/specs/2026-04-28-iceberg-metadata-refresh-design.md`), not yet implemented.
+**Status:** Implemented. `supports_format()` / `refresh_table()` are on `CatalogTarget`, the engine refreshes every synced table on every run, and `catalog_sync/targets/snowflake.py` + `sync_snowflake.py` implement Iceberg refresh for Snowflake (see the spec's "Implementation notes").
 
-**Unity Catalog implementation:** Will stay Delta-only initially; refresh method is a no-op. Future catalog targets (Snowflake, Polaris) will implement Iceberg refresh.
+**Unity Catalog implementation:** Stays Delta-only; refresh method is a no-op.
 
 **User feedback (2026-04-28):** Overall architecture aligns well with how Tableflow is evolving. Key nuances to address when implementing:
 - Target-aware format selection (Polaris prefers Iceberg, Unity prefers Delta, not just "pick Delta if both exist")

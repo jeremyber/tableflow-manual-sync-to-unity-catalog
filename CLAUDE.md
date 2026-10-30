@@ -21,10 +21,13 @@ Customers must already have:
 ## Architecture
 
 - **sync.py**: Self-contained entry point — full sync (tables + tags). Runs from laptop, auto-loads `.env.sync` from project root. Discovers topics via Tableflow API, registers tables in Databricks, syncs governance tags via GraphQL.
+- **sync_snowflake.py**: Self-contained Snowflake (Iceberg) sync. Auto-loads `.env.snowflake`. Lists storage for the newest metadata file, so it must run where the bucket/container is reachable.
 - **sync_tags.py**: Tags-only sync — for use when CC native catalog sync handles table creation. Reads existing UC tables, fetches tags via GraphQL, applies via `ALTER TABLE SET TAGS`.
 - **catalog_sync/**: Modular Python engine (used by Lambda handler)
   - `sources/confluent_cloud.py`: Discovers Tableflow-enabled topics via REST API + fetches tags via Stream Catalog GraphQL API
   - `targets/unity_catalog.py`: Registers external tables + syncs governance tags via Databricks SQL
+  - `targets/snowflake.py`: Registers Iceberg tables via an object-store catalog integration and refreshes them to the newest metadata file every run
+  - `iceberg_metadata.py`: Finds the newest Iceberg `metadata.json` for a `table_path` in S3 / ADLS
   - `engine.py`: Diff-based sync orchestration (add/update/remove tables + tag sync)
   - `handler.py`: Builds source + target, runs engine (Lambda entry point)
   - `config.py`: Environment-variable-driven configuration
@@ -174,6 +177,7 @@ This tool is designed to be extensible for multiple catalog targets and cloud pr
 |-----------|--------|-------|
 | **Catalog Targets** |
 | Unity Catalog | ✅ Supported | Via Databricks SQL |
+| Snowflake (Iceberg, object-store integration) | ✅ Supported | `targets/snowflake.py`, `sync_snowflake.py` |
 | Snowflake Open Catalog | 🔄 Planned | High customer demand |
 | Apache Polaris | 🔄 Planned | Azure customers requesting |
 | BigQuery/BigLake | 🔄 Planned | GCP integration |

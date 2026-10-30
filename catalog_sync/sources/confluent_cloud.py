@@ -66,8 +66,12 @@ class ConfluentCloudSource(CatalogSource):
         schema_registry_api_key: str | None = None,
         schema_registry_api_secret: str | None = None,
         sync_tags: bool = False,
+        preferred_formats: tuple[str, ...] = ("DELTA",),
     ) -> None:
         self._auth = (api_key, api_secret)
+        # Formats to emit, most preferred first. Topics publishing none of
+        # them are skipped. Unity Catalog wants Delta; Snowflake wants Iceberg.
+        self._preferred_formats = tuple(f.upper() for f in preferred_formats)
         self._cluster_id = cluster_id
         self._environment_id = environment_id
         self._namespace = namespace
@@ -197,14 +201,20 @@ class ConfluentCloudSource(CatalogSource):
                     )
                     continue
 
-                # Prefer DELTA if available, otherwise take the first format
-                table_formats = spec.get("table_formats") or ["DELTA"]
-                raw_format = (
-                    "DELTA" if "DELTA" in table_formats
-                    else table_formats[0].upper()
+                # Pick the target's most preferred format that the topic
+                # publishes; otherwise fall back to the first one (and let
+                # validation skip it if the target can't use it).
+                table_formats = [
+                    f.upper() for f in (spec.get("table_formats") or ["DELTA"])
+                ]
+                raw_format = next(
+                    (f for f in self._preferred_formats if f in table_formats),
+                    table_formats[0],
                 )
                 try:
-                    table_format = validate_table_format(raw_format)
+                    table_format = validate_table_format(
+                        raw_format, set(self._preferred_formats),
+                    )
                 except ValueError:
                     logger.warning(
                         "Skipping topic '%s' — unsupported format '%s'",

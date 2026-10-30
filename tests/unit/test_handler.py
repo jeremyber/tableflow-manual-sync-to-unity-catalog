@@ -1,6 +1,6 @@
 from unittest.mock import patch, MagicMock
 from catalog_sync.handler import lambda_handler, build_source, build_target
-from catalog_sync.config import SyncConfig, SourceType
+from catalog_sync.config import SyncConfig, SourceType, TargetType
 
 
 def _config(**overrides):
@@ -69,3 +69,38 @@ def test_build_target():
             client_id=None,
             client_secret=None,
         )
+
+
+def test_build_source_prefers_iceberg_for_snowflake():
+    config = _config(target_type=TargetType.SNOWFLAKE)
+    with patch("catalog_sync.handler.ConfluentCloudSource") as mock_cls:
+        build_source(config)
+        assert mock_cls.call_args.kwargs["preferred_formats"] == ("ICEBERG",)
+
+
+def test_build_target_snowflake():
+    config = _config(
+        target_type=TargetType.SNOWFLAKE,
+        target_schema="CONFLUENT",
+        snowflake_account="org-acct",
+        snowflake_user="SYNC_USER",
+        snowflake_private_key_path="/keys/sync.p8",
+        snowflake_role="SYNC_ROLE",
+        snowflake_warehouse="SYNC_WH",
+        snowflake_database="TF_DB",
+        snowflake_external_volume="TF_VOLUME",
+        snowflake_catalog_integration="TF_OBJECT_STORE",
+    )
+    with patch("catalog_sync.targets.snowflake.connect_snowflake") as mock_connect, \
+         patch("catalog_sync.targets.snowflake.SnowflakeTarget") as mock_cls:
+        build_target(config)
+
+    mock_connect.assert_called_once_with(
+        account="org-acct", user="SYNC_USER", role="SYNC_ROLE", warehouse="SYNC_WH",
+        private_key_path="/keys/sync.p8", password=None,
+    )
+    kwargs = mock_cls.call_args.kwargs
+    assert kwargs["database"] == "TF_DB"
+    assert kwargs["schema_name"] == "CONFLUENT"
+    assert kwargs["external_volume"] == "TF_VOLUME"
+    assert kwargs["catalog_integration"] == "TF_OBJECT_STORE"
